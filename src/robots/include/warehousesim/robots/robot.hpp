@@ -81,9 +81,9 @@ class Robot {
     return isValidTransition(state_, next);
   }
   [[nodiscard]] bool isStationary() const noexcept { return robots::isStationary(state_); }
-  // Idle and not wanting a recharge: may be given a task.
+  // Idle, holding some charge and not wanting a recharge: may be given a task.
   [[nodiscard]] bool isAvailable() const noexcept {
-    return state_ == RobotState::Idle && !needsCharge();
+    return state_ == RobotState::Idle && !needsCharge() && !battery_.isEmpty();
   }
   // Navigating and standing on its destination.
   [[nodiscard]] bool hasArrived() const noexcept;

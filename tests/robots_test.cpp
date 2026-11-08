@@ -763,6 +763,9 @@ TEST(RobotBatteryTest, NeedsChargeIsStrictlyBelowTheReserve) {
   RobotSpec noReserve;  // lowBatteryLevel == 0: never "low", even when empty
   noReserve.initialCharge = 0;
   EXPECT_FALSE(Robot(R(1), P(0, 0), noReserve).needsCharge());
+  EXPECT_FALSE(Robot(R(1), P(0, 0), noReserve).isAvailable());  // but nothing left: no task either
+  noReserve.initialCharge = 1;
+  EXPECT_TRUE(Robot(R(1), P(0, 0), noReserve).isAvailable());
 }
 
 TEST(RobotBatteryTest, TotalDrainEqualsTheSumOfWhatTheRobotDid) {

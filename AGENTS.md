@@ -29,7 +29,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `world`      | grid model: cell types, static layout, robot occupancy, predefined layouts | core            |
 | `robots`     | robot entity: pose, battery, task, path, state machine | core                                |
 | `planning`   | `PathPlanner` interface, A* with options, results, reused workspace | core, world            |
-| `tasks`      | task lifecycle, assignment, task generation           | core, robots                         |
+| `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `view`       | camera, scene (draw list), input -> view logic; no SDL | core, world, simulation             |
@@ -69,7 +69,17 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   `planning_alloc_test.cpp` must stay green.
 - Benchmarks (`bench/`) never assert on timing, since that flakes. They cross-check results instead, and
   numbers are only quoted from an optimised build. `src/` must never depend on `testing/`.
-- Depend on interfaces at module seams (`PathPlanner`, `TaskAssigner`) and inject implementations through
+- Tasks change status only through `TaskQueue`, and a task is claimed only by `TaskQueue::tryAssign`,
+  which succeeds for exactly one caller. A `Dispatcher` is a pure decider: it returns a `DispatchPlan` and
+  never touches the queue or the robots; `Simulation::assignTasks` applies the plan through `tryAssign` and
+  only to available robots, which is what guarantees exclusivity. Keep it that way: never assign a task by
+  writing to a `Task`, and never trust a plan. The dispatch order (priority, then age, then id) and the
+  robot tie-break (lowest id) must stay total and independent of container order; tests for this build into
+  `warehousesim_task_tests`, linked against `tasks` and `testing` only, so `tasks` must not reach for
+  simulation, view or SDL. Dispatcher changes need a matching update of the independent reference greedy in
+  `tests/dispatcher_test.cpp`. Cancelling through `Simulation::cancelTask` must also stop the robot that
+  holds the task.
+- Depend on interfaces at module seams (`PathPlanner`, `DistanceEstimator`, `Dispatcher`) and inject implementations through
   constructors. No global or singleton state.
 - Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them
   together only through `world::World`, which keeps robots off obstacles and one per cell. New world code

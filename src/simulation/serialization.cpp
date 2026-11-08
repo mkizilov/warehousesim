@@ -41,6 +41,7 @@ json toJson(const Snapshot& snapshot) {
     tasksJson.push_back({{"id", task.id.value},
                          {"pickup", pointToJson(task.pickup)},
                          {"dropoff", pointToJson(task.dropoff)},
+                         {"priority", tasks::toString(task.priority)},
                          {"status", tasks::toString(task.status)},
                          {"assignee", optionalIdToJson(task.assignee)},
                          {"createdAt", task.createdAt}});
@@ -49,7 +50,8 @@ json toJson(const Snapshot& snapshot) {
               {"robots", std::move(robotsJson)},
               {"activeTasks", std::move(tasksJson)},
               {"completedTasks", snapshot.completedTasks},
-              {"failedTasks", snapshot.failedTasks}};
+              {"failedTasks", snapshot.failedTasks},
+              {"cancelledTasks", snapshot.cancelledTasks}};
 }
 
 world::Warehouse warehouseFromJson(const json& document) {

@@ -50,6 +50,16 @@ warehousesim_add_test(warehousesim_robot_tests
   SOURCES robots_test.cpp
   LIBS warehousesim::robots)
 
+# Task queue, estimators, generator and dispatcher need the planner and robots but no simulation,
+# rendering or SDL. The reference search and map generators come from testing/.
+warehousesim_add_test(warehousesim_task_tests
+  SOURCES
+    dispatcher_test.cpp
+    distance_estimator_test.cpp
+    task_generator_test.cpp
+    task_queue_test.cpp
+  LIBS warehousesim::tasks warehousesim::testing)
+
 # Camera, scene and view-controller tests need no SDL or display, so they build and run even
 # when WAREHOUSESIM_BUILD_GUI is OFF.
 warehousesim_add_test(warehousesim_tests
@@ -57,8 +67,8 @@ warehousesim_add_test(warehousesim_tests
     camera_test.cpp
     runner_test.cpp
     scene_test.cpp
+    simulation_dispatch_test.cpp
     simulation_test.cpp
-    tasks_test.cpp
     view_controller_test.cpp
   LIBS warehousesim::view warehousesim::simulation)
 

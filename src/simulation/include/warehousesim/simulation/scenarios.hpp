@@ -8,8 +8,9 @@
 
 namespace warehousesim::simulation {
 
-// "demo" layout with four robots and a new random task every 5 ticks. Robots spend two ticks
-// loading and two unloading but have no battery model (the hall has no charging stations).
+// "demo" layout with four robots and a new random task (of random priority) every 5 ticks. Robots
+// spend two ticks loading and two unloading but have no battery model (the hall has no charging
+// stations).
 [[nodiscard]] Simulation makeDemoSimulation(std::uint64_t seed);
 
 // Runs any predefined layout (see world::predefinedLayouts()) with the same task spawn rate.

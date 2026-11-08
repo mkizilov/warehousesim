@@ -5,9 +5,9 @@ headless library and CLI plus a separate SDL3 visualisation.
 
 ```
 core ← world ← planning ┐
-core ← robots ← tasks   ├← simulation ← view (no SDL) ← rendering (SDL3) ← apps/gui
-                        ┘      ↑
-                          apps/cli (headless)
+core ← robots ──────────┴← tasks ← simulation ← view (no SDL) ← rendering (SDL3) ← apps/gui
+                                       ↑
+                                  apps/cli (headless)
 ```
 
 | Module       | Contents                                                                  |
@@ -16,7 +16,7 @@ core ← robots ← tasks   ├← simulation ← view (no SDL) ← rendering (S
 | `world`      | grid model, occupancy, predefined layouts (see below); no SDL or JSON     |
 | `robots`     | `Robot` entity: pose, speed, battery, task, path and an explicit state machine |
 | `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
-| `tasks`      | `TaskBoard` lifecycle, `NearestRobotAssigner`, seeded `TaskGenerator`     |
+| `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
 | `simulation` | `Simulation` tick engine, `SimulationRunner` thread, JSON, demo scenario  |
 | `view`       | `Camera`, `buildScene()` draw lists, `ViewController`; no SDL, fully tested |
@@ -156,6 +156,54 @@ the same way with `findPath`, the reused workspace was up to 50% faster on open 
 mazes and unreachable goals, which are dominated by heap operations. The paths it returns are identical:
 a check over 30,000 random queries found no difference.
 
+## Tasks and dispatching
+
+A `tasks::Task` has a unique `TaskId`, a `pickup` and a `dropoff` cell, a `TaskPriority` (`Low`, `Normal`,
+`High`, `Urgent`), the tick it was created (`createdAt`), a `TaskStatus` and the `assignee` robot that holds
+or last held it.
+
+```
+Pending -> Assigned -> InProgress -> Completed
+```
+
+`Assigned` goes back to `Pending` if the robot gives the task up before collecting it. `Failed` is reachable
+from `Pending` (the dispatcher found the task impossible), `Assigned` and `InProgress` (the carrying robot was
+lost). `Cancelled` is reachable from every open state. `Completed`, `Failed` and `Cancelled` are final.
+
+`TaskQueue` is the one place tasks live and change status. `submit` adds a task, `cancel` withdraws it and
+`complete` finishes it; a transition the lifecycle does not allow throws `std::logic_error`, except
+`tryAssign` and `cancel`, which return `false` because losing that race is an expected outcome. Waiting
+tasks are kept in dispatch order: highest priority first, then oldest, then lowest id, a total order that
+does not depend on insertion history.
+
+**A task is exclusive.** `TaskQueue::tryAssign(task, robot)` is the only way to claim one and succeeds for
+exactly one caller. A dispatcher only *proposes* a plan; `Simulation` applies it through `tryAssign` and only
+to robots that are still available, so a faulty dispatcher still cannot give one task to two robots or two
+tasks to one robot (`SimulationDispatchTest.AFaultyDispatcherCannotGiveOneTaskToTwoRobotsOrTwoTasksToOne`).
+
+`GreedyDispatcher` is deterministic and does not change the queue or the robots:
+
+1. Pending tasks are taken in queue order, so an urgent task is never starved by a nearer, less important one.
+2. Each task goes to the *available* robot (`Robot::isAvailable()`: idle and charged enough) with the
+   smallest estimated distance to its pickup; ties go to the lowest robot id. Each robot gets at most one task
+   per plan, whatever order the fleet vector is in.
+3. Robots that cannot reach the pickup are skipped. A task whose delivery leg (pickup to dropoff) is
+   impossible, or whose pickup no robot in the fleet can ever reach, is *rejected* and ends up `Failed` so it
+   does not sit in the queue forever. A task only a busy robot can reach stays `Pending`.
+
+Distances come from a `DistanceEstimator`: `PathDistance` (default) is the real A* route length, cached per
+(from, to) pair including "unreachable" answers; `ManhattanDistance` is free but cannot see walls, so it never
+rejects anything.
+
+`Simulation::submitTask(pickup, dropoff, priority)` adds a task and `cancelTask(id)` withdraws one. A robot
+working on a cancelled task stops and becomes idle, and cargo it carried is dropped. Cancelling a task that has
+already finished returns `false`; an unknown id throws `std::out_of_range`. The bundled scenarios give spawned
+tasks random priorities (`SimulationConfig::varyTaskPriority`).
+
+Limitations: assignment is greedy per task in priority order, not a globally optimal matching, and it never
+preempts a robot that is already working, so an urgent task waits for the next free robot. Estimates ignore
+other robots (they move). `PathDistance` assumes the layout does not change; call `reset()` if it does.
+
 ## Robots
 
 `robots::Robot` is a self-contained entity (it depends only on `core`; it never looks at the warehouse,
@@ -246,8 +294,8 @@ the status bar.
 ## Behaviour notes
 
 - Scenarios have up to four robots (the demo layout starts them on row 0; other layouts on charging
-  stations) and spawn a random task every 5 ticks: from a `Pickup` cell if the layout has any, otherwise
-  from an aisle cell beside a shelf, to a random `Dropoff`.
+  stations) and spawn a random task every 5 ticks, with a random priority: from a `Pickup` cell if the
+  layout has any, otherwise from an aisle cell beside a shelf, to a random `Dropoff`.
 - Robots act in id order each tick (see Robots above). A robot blocked for 3 ticks makes an idle or lower-priority (higher id)
   blocker step aside, or routes around a higher-priority one. Dropoffs are single cells reachable from
   one side in the demo layout, so heavy demand queues up; nothing deadlocks (see `DemoScenarioNeverDeadlocks`).

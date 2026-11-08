@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <vector>
 
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/ids.hpp"
@@ -11,13 +10,33 @@
 
 namespace warehousesim::tasks {
 
-enum class TaskStatus : std::uint8_t {
-  Pending,
-  Assigned,
-  InProgress,  // picked up, being delivered
-  Completed,
-  Failed,  // a required location was unreachable
+// How urgently a task should be served: the dispatcher always considers higher priorities first.
+enum class TaskPriority : std::uint8_t {
+  Low,
+  Normal,
+  High,
+  Urgent,
 };
+
+[[nodiscard]] const char* toString(TaskPriority priority) noexcept;
+
+// Lifecycle:
+//
+//   Pending -> Assigned -> InProgress -> Completed
+//
+// Assigned -> Pending when a robot gives the task back before collecting it. Failed is reachable
+// from Pending (the dispatcher found it impossible), Assigned and InProgress. Cancelled is
+// reachable from every open state. Completed, Failed and Cancelled are final.
+enum class TaskStatus : std::uint8_t {
+  Pending,     // waiting in the queue for a robot
+  Assigned,    // exactly one robot has claimed it and is heading to the pickup (or loading)
+  InProgress,  // picked up, being delivered
+  Completed,   // delivered
+  Failed,      // could not be done (unreachable, or the carrying robot was lost)
+  Cancelled,   // withdrawn by the requester
+};
+
+inline constexpr std::size_t kTaskStatusCount = 6;
 
 [[nodiscard]] const char* toString(TaskStatus status) noexcept;
 
@@ -26,36 +45,22 @@ struct Task {
   core::Point pickup;
   core::Point dropoff;
   TaskStatus status = TaskStatus::Pending;
-  std::optional<core::RobotId> assignee;
+  std::optional<core::RobotId> assignee;  // the robot that holds it, or held it last
   core::Tick createdAt = 0;
+  TaskPriority priority = TaskPriority::Normal;
+
+  // Still to be done: not yet completed, failed or cancelled.
+  [[nodiscard]] bool isOpen() const noexcept {
+    return status == TaskStatus::Pending || status == TaskStatus::Assigned ||
+           status == TaskStatus::InProgress;
+  }
+  // A robot currently holds it.
+  [[nodiscard]] bool isAssigned() const noexcept {
+    return status == TaskStatus::Assigned || status == TaskStatus::InProgress;
+  }
+  [[nodiscard]] bool isFinished() const noexcept { return !isOpen(); }
 
   bool operator==(const Task&) const = default;
-};
-
-// Owns every task and enforces the lifecycle
-// Pending -> Assigned -> InProgress -> Completed, with Failed reachable from the middle two and
-// Assigned -> Pending when a robot gives a task back before collecting it.
-// Invalid transitions throw std::logic_error; unknown ids throw std::out_of_range.
-class TaskBoard {
- public:
-  core::TaskId submit(core::Point pickup, core::Point dropoff, core::Tick now);
-
-  [[nodiscard]] const Task* find(core::TaskId id) const noexcept;
-  [[nodiscard]] const std::vector<Task>& all() const noexcept { return tasks_; }
-  [[nodiscard]] std::size_t count(TaskStatus status) const noexcept;
-
-  void assign(core::TaskId id, core::RobotId robot);
-  // Assigned -> Pending: the robot can no longer do it, so it goes back up for assignment.
-  void release(core::TaskId id);
-  void markInProgress(core::TaskId id);
-  void complete(core::TaskId id);
-  void fail(core::TaskId id);
-
- private:
-  Task& mutableTask(core::TaskId id);
-  void transition(core::TaskId id, TaskStatus expected, TaskStatus next);
-
-  std::vector<Task> tasks_;  // task with id N lives at index N - 1
 };
 
 }  // namespace warehousesim::tasks

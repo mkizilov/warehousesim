@@ -15,11 +15,11 @@ using robots::RobotState;
 
 Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& robotStarts,
                        SimulationConfig config, std::unique_ptr<planning::PathPlanner> planner,
-                       std::unique_ptr<tasks::TaskAssigner> assigner)
+                       std::unique_ptr<tasks::Dispatcher> dispatcher)
     : world_(std::move(warehouse)),
       chargers_(world_.layout().cellsOfType(world::CellType::Charging)),
       planner_(planner ? std::move(planner) : std::make_unique<planning::AStarPlanner>()),
-      assigner_(assigner ? std::move(assigner) : std::make_unique<tasks::NearestRobotAssigner>()),
+      dispatcher_(dispatcher ? std::move(dispatcher) : std::make_unique<tasks::GreedyDispatcher>()),
       config_(config) {
   robots::RobotSpec spec = config_.robot;
   if (chargers_.empty()) {
@@ -46,16 +46,34 @@ Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& rob
     }
     auto dropoffs = world_.layout().cellsOfType(world::CellType::Dropoff);
     if (!pickups.empty() && !dropoffs.empty()) {
-      generator_.emplace(std::move(pickups), std::move(dropoffs), config_.seed);
+      generator_.emplace(std::move(pickups), std::move(dropoffs), config_.seed,
+                         config_.varyTaskPriority);
     }
   }
 }
 
-core::TaskId Simulation::submitTask(Point pickup, Point dropoff) {
+core::TaskId Simulation::submitTask(Point pickup, Point dropoff, tasks::TaskPriority priority) {
   if (!world_.isWalkable(pickup) || !world_.isWalkable(dropoff)) {
     throw std::invalid_argument("task locations must be walkable cells");
   }
-  return tasks_.submit(pickup, dropoff, clock_.tick());
+  return tasks_.submit(pickup, dropoff, clock_.tick(), priority);
+}
+
+bool Simulation::cancelTask(core::TaskId id) {
+  if (tasks_.find(id) == nullptr) {
+    throw std::out_of_range("unknown task id");
+  }
+  if (!tasks_.cancel(id)) {
+    return false;
+  }
+  // The task stays recorded against the robot that held it; that robot stops working on it.
+  if (const auto holder = tasks_.find(id)->assignee) {
+    Robot& robot = robotById(*holder);
+    if (robot.task() == id) {
+      robot.abortTask();
+    }
+  }
+  return true;
 }
 
 Robot& Simulation::robotById(core::RobotId id) {
@@ -110,13 +128,13 @@ Snapshot Simulation::snapshot() const {
                              robot.battery().capacity(), robot.task()});
   }
   for (const tasks::Task& task : tasks_.all()) {
-    if (task.status == tasks::TaskStatus::Pending || task.status == tasks::TaskStatus::Assigned ||
-        task.status == tasks::TaskStatus::InProgress) {
+    if (task.isOpen()) {
       result.activeTasks.push_back(task);
     }
   }
   result.completedTasks = tasks_.count(tasks::TaskStatus::Completed);
   result.failedTasks = tasks_.count(tasks::TaskStatus::Failed);
+  result.cancelledTasks = tasks_.count(tasks::TaskStatus::Cancelled);
   return result;
 }
 
@@ -125,14 +143,28 @@ void Simulation::spawnTask() {
     return;
   }
   const tasks::TaskRequest request = generator_->next();
-  tasks_.submit(request.pickup, request.dropoff, clock_.tick());
+  tasks_.submit(request.pickup, request.dropoff, clock_.tick(), request.priority);
 }
 
+// Asks the dispatcher for a plan and applies it. The plan is only a proposal: a task is handed out
+// only if the queue still lets this robot claim it, and only to a robot that is still available,
+// so a faulty dispatcher still cannot give one task to two robots or two tasks to one robot.
 void Simulation::assignTasks() {
-  for (const tasks::Assignment& assignment : assigner_->assign(robots_, tasks_.all())) {
+  const tasks::DispatchPlan plan = dispatcher_->plan(world_.layout(), robots_, tasks_);
+
+  for (const tasks::Rejection& rejection : plan.rejections) {
+    const tasks::Task* task = tasks_.find(rejection.task);
+    if (task != nullptr && task->status == tasks::TaskStatus::Pending) {
+      tasks_.reject(rejection.task);
+    }
+  }
+
+  for (const tasks::Assignment& assignment : plan.assignments) {
     Robot& robot = robotById(assignment.robot);
+    if (!robot.isAvailable() || !tasks_.tryAssign(assignment.task, assignment.robot)) {
+      continue;
+    }
     const Point pickup = tasks_.find(assignment.task)->pickup;
-    tasks_.assign(assignment.task, assignment.robot);
     auto path = planner_->findPath(world_.layout(), robot.position(), pickup, {});
     if (!path) {
       tasks_.fail(assignment.task);

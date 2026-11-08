@@ -39,6 +39,7 @@ SimulationConfig scenarioConfig(std::uint64_t seed, const robots::RobotSpec& rob
   SimulationConfig config;
   config.seed = seed;
   config.taskSpawnInterval = kTaskSpawnInterval;
+  config.varyTaskPriority = true;
   config.robot = robot;
   return config;
 }
