@@ -27,6 +27,23 @@ warehousesim_add_test(warehousesim_world_tests
     world_model_test.cpp
   LIBS warehousesim::world)
 
+# Linked against core, world and planning only: the path planner needs no robots, tasks,
+# simulation, rendering or SDL. The reference search and map generators come from testing/.
+warehousesim_add_test(warehousesim_planning_tests
+  SOURCES
+    astar_reference_test.cpp
+    astar_scenarios_test.cpp
+    planning_test.cpp
+  LIBS warehousesim::planning warehousesim::testing)
+
+# Counts heap allocations by replacing operator new in this executable, so it is not built under
+# sanitizers (which interpose their own allocator).
+if(NOT WAREHOUSESIM_SANITIZE)
+  warehousesim_add_test(warehousesim_planning_alloc_tests
+    SOURCES planning_alloc_test.cpp
+    LIBS warehousesim::testing_allocation)
+endif()
+
 # Linked against core and robots only: the robot entity and its state machine need no world,
 # planner, simulation, rendering or SDL.
 warehousesim_add_test(warehousesim_robot_tests
@@ -38,7 +55,6 @@ warehousesim_add_test(warehousesim_robot_tests
 warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
-    planning_test.cpp
     runner_test.cpp
     scene_test.cpp
     simulation_test.cpp

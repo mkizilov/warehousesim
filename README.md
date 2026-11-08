@@ -15,8 +15,9 @@ core ← robots ← tasks   ├← simulation ← view (no SDL) ← rendering (S
 | `core`       | `Point`, strong ids, `SimClock`/`Tick`, seedable `Rng` (SplitMix64)       |
 | `world`      | grid model, occupancy, predefined layouts (see below); no SDL or JSON     |
 | `robots`     | `Robot` entity: pose, speed, battery, task, path and an explicit state machine |
-| `planning`   | `PathPlanner` interface, deterministic 4-connected A*                     |
+| `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
 | `tasks`      | `TaskBoard` lifecycle, `NearestRobotAssigner`, seeded `TaskGenerator`     |
+| `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
 | `simulation` | `Simulation` tick engine, `SimulationRunner` thread, JSON, demo scenario  |
 | `view`       | `Camera`, `buildScene()` draw lists, `ViewController`; no SDL, fully tested |
 | `rendering`  | SDL3 `SdlWindow` (RAII): turns SDL events into `InputEvents`, runs a draw list |
@@ -76,6 +77,84 @@ default 60), `--frames N` (exit after N frames; 0 = until closed).
 | drag with any mouse button, arrow keys, WASD | pan |
 | `0` | fit the whole warehouse |
 | Esc, closing the window, Ctrl-C | quit (the worker thread is joined and SDL shut down) |
+
+## Path planning
+
+`planning::AStarPlanner` finds shortest routes on the warehouse grid. It depends only on `core` and `world`
+(its tests build as `warehousesim_planning_tests`, linked against `planning` and the header-only `testing` helpers): it knows nothing about robots,
+task assignment or rendering. `PathPlanner::findPath(warehouse, start, goal, blocked)` returns the cells to
+walk (excluding `start`, including `goal`), or `nullopt`. `blocked` holds cells that are temporarily
+impassable, typically where other robots stand; `start` may be in it, `goal` may not.
+
+- **Obstacles and moves.** Walls and shelves are never entered; pickup, dropoff, charging and free cells are
+  ordinary terrain. A step goes one cell in one of the allowed directions at cost 1. `AStarOptions::directions`
+  is a `core::DirectionSet` (default: all four), so a planner can be confined to rows, to columns, or to
+  one-way travel such as East/South only. An empty set is rejected.
+- **Heuristic.** Manhattan distance to the goal. With unit costs and orthogonal moves it is admissible
+  (never over-estimates, for any subset of directions) and consistent, so each cell is expanded at most once and the
+  first route found is shortest. Both properties are checked against true distances in the tests.
+- **Reproducible tie-breaking.** The open list is ordered by `(f, h, row-major cell index)` and neighbours are
+  tried north, east, south, west. Those keys are unique, so the answer does not depend on how the standard
+  library implements its heap: the same query gives the same path on every platform. On an open grid the
+  path runs along the start's row first, then down the goal's column. A golden hash over 400 random queries
+  pins this down (`ResultsAreReproducibleAcrossPlatforms`).
+- **Failures are explicit.** `AStarPlanner::search()` returns a `SearchResult` with a `SearchStatus`
+  (`Found`, `InvalidStart`, `InvalidGoal`, `GoalBlocked`, `Unreachable`, `BudgetExceeded`), the path cost and
+  the number of cells expanded. A goal or start that is sealed in is rejected before any searching; a goal on the
+  far side of a wall makes A* exhaust the start's side of the map, which `AStarOptions::maxExpansions` can bound
+  (status `BudgetExceeded` means "gave up", not "unreachable").
+- **Allocation.** Cost/parent arrays, the blocked-cell marks and the open list are kept in the planner and
+  invalidated with a generation counter rather than cleared. After the first search on a grid of a given size,
+  `search()` with a reused path buffer allocates nothing and `findPath()` allocates exactly the returned
+  path (`planning_alloc_test.cpp` counts `operator new`). A planner therefore is not thread-safe: use one per
+  thread (the simulation owns one).
+
+Checks: besides scenario tests (open grids, mazes, serpentine and one-cell-wide corridors, blocked/invalid
+goals, sealed and unreachable targets, restricted moves, search budgets), A* is compared with an independent
+breadth-first search (`testing/reference_search.hpp`) on ~12,000 random queries over thousands of random maps,
+mazes and move sets: same reachability, same optimal length, legal route.
+
+### Benchmark
+
+```sh
+cmake --preset release && cmake --build --preset release
+build/release/bench/warehousesim_planning_bench                # 16x16 .. 512x512
+build/release/bench/warehousesim_planning_bench --max-size 256 --csv
+```
+
+Scenarios per map size: `open` (empty grid, corner to corner), `scattered25` (25% random obstacles), `maze`
+(perfect maze, one long winding route), `unreachable` (a wall splits the map: A* must exhaust the start's
+half) and `sealed-goal` (rejected without searching). Columns: **warm** = reused planner and path buffer,
+**cold** = a new planner for every query (pays for allocating the workspace), **bfs** = the reference
+breadth-first search (which allocates a distance field per call), and heap allocations per warm search. It
+always cross-checks A* against the reference and exits non-zero on a mismatch; `ctest` runs it with `--quick`.
+Only trust timings from an optimised build; the program says which kind it is.
+
+Measured on an Apple M4 (arm64, macOS), Apple clang 21 with `-O3 -DNDEBUG`, one thread, median of 11 samples,
+0 heap allocations per warm search in every row:
+
+| map | scenario | path | expanded | warm A* | cold A* | BFS |
+|-----|----------|-----:|---------:|--------:|--------:|----:|
+| 64x64 | open | 126 | 127 | 2.8 us | 4.2 us | 26.6 us |
+| 64x64 | scattered25 | 126 | 404 | 9.6 us | 10.6 us | 25.1 us |
+| 256x256 | open | 510 | 511 | 14.8 us | 22.1 us | 415 us |
+| 256x256 | scattered25 | 510 | 3,926 | 144 us | 130 us | 678 us |
+| 256x256 | maze | 8,760 | 24,788 | 457 us | 464 us | 410 us |
+| 256x256 | unreachable | - | 32,768 | 3.72 ms | 3.76 ms | 0.22 ms |
+| 512x512 | open | 1,022 | 1,023 | 34.2 us | 63.7 us | 1.65 ms |
+| 512x512 | scattered25 | 1,022 | 14,803 | 864 us | 903 us | 3.35 ms |
+| 512x512 | maze | 19,432 | 46,506 | 915 us | 903 us | 2.09 ms |
+| 512x512 | unreachable | - | 131,072 | 16.7 ms | 16.6 ms | 0.84 ms |
+| 512x512 | sealed-goal | - | 0 | 0.01 us | 30.5 us | 1.66 ms |
+
+A* is far ahead when the heuristic helps (open and lightly obstructed maps, and sealed goals), roughly level on
+mazes, and about 20x slower than plain BFS when asked to exhaust a large region for an unreachable goal: that
+is the cost of the priority queue (about 130 ns per expanded cell there against about 6 ns for BFS's FIFO
+queue), and the reason to use `maxExpansions` for speculative queries. Against the previous implementation (a fresh `std::priority_queue` and cost/parent vectors on every call), measured
+the same way with `findPath`, the reused workspace was up to 50% faster on open maps (512x512: 79.6 us to 39.9 us;
+256x256: 25.9 us to 17.5 us), 8-16% faster on scattered-obstacle maps (256x256: 96 us to 80 us), and level on
+mazes and unreachable goals, which are dominated by heap operations. The paths it returns are identical:
+a check over 30,000 random queries found no difference.
 
 ## Robots
 

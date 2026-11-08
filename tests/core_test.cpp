@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "warehousesim/core/clock.hpp"
+#include "warehousesim/core/direction_set.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
@@ -71,6 +72,36 @@ TEST(DirectionTest, DirectionBetweenFindsOnlyOrthogonalNeighbours) {
   EXPECT_FALSE(directionBetween(P(2, 2), P(3, 3)).has_value());
   EXPECT_FALSE(directionBetween(P(2, 2), P(4, 2)).has_value());
   EXPECT_FALSE(directionBetween(P(0, 0), P(-1, 1)).has_value());
+}
+
+TEST(DirectionSetTest, StartsEmptyAndTracksMembership) {
+  using warehousesim::core::Direction;
+  using warehousesim::core::DirectionSet;
+  constexpr DirectionSet none;
+  EXPECT_TRUE(none.empty());
+  EXPECT_EQ(none.size(), 0U);
+  constexpr DirectionSet all = DirectionSet::all();
+  EXPECT_EQ(all.size(), 4U);
+  for (const Direction direction : warehousesim::core::kAllDirections) {
+    EXPECT_FALSE(none.contains(direction));
+    EXPECT_TRUE(all.contains(direction));
+  }
+}
+
+TEST(DirectionSetTest, WithAndWithoutReturnNewSetsAndAreIdempotent) {
+  using warehousesim::core::Direction;
+  using warehousesim::core::DirectionSet;
+  const DirectionSet eastOnly = DirectionSet{}.with(Direction::East);
+  EXPECT_TRUE(eastOnly.contains(Direction::East));
+  EXPECT_EQ(eastOnly.size(), 1U);
+  EXPECT_TRUE(eastOnly == eastOnly.with(Direction::East));
+  const DirectionSet noEast = DirectionSet::all().without(Direction::East);
+  EXPECT_FALSE(noEast.contains(Direction::East));
+  EXPECT_EQ(noEast.size(), 3U);
+  EXPECT_TRUE(noEast == noEast.without(Direction::East));
+  EXPECT_TRUE(noEast.with(Direction::East) == DirectionSet::all());
+  EXPECT_TRUE((DirectionSet{Direction::North, Direction::South}) ==
+              (DirectionSet{Direction::South, Direction::North}));
 }
 
 TEST(IdsTest, DefaultIsInvalidAndDistinctTypesCompareByValue) {

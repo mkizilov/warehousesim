@@ -57,6 +57,9 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
+      - name: Planning benchmark (informational; also cross-checks A* against BFS)
+        if: matrix.preset == 'release'
+        run: build/release/bench/warehousesim_planning_bench --max-size 256
       - name: Headless CLI smoke run (every predefined layout)
         run: |
           for layout in demo compact fulfilment; do

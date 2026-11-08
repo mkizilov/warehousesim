@@ -15,6 +15,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(WAREHOUSESIM_BUILD_TESTS "Build the GoogleTest unit tests" ON)
+option(WAREHOUSESIM_BUILD_BENCHMARKS "Build the planning benchmark" ON)
 option(WAREHOUSESIM_BUILD_GUI "Build the SDL3 graphical executable" ON)
 option(WAREHOUSESIM_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(WAREHOUSESIM_ENABLE_CLANG_TIDY "Run clang-tidy while compiling project targets" OFF)
@@ -31,10 +32,18 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(WarehouseSimTargets)
 include(WarehouseSimDependencies)
 
-add_subdirectory(src)
-add_subdirectory(apps)
-
 if(WAREHOUSESIM_BUILD_TESTS)
   enable_testing()
+endif()
+
+add_subdirectory(src)
+add_subdirectory(apps)
+add_subdirectory(testing)
+
+if(WAREHOUSESIM_BUILD_BENCHMARKS)
+  add_subdirectory(bench)
+endif()
+
+if(WAREHOUSESIM_BUILD_TESTS)
   add_subdirectory(tests)
 endif()

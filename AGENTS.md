@@ -28,9 +28,10 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `core`       | points, ids, clock, deterministic RNG                 | std only                             |
 | `world`      | grid model: cell types, static layout, robot occupancy, predefined layouts | core            |
 | `robots`     | robot entity: pose, battery, task, path, state machine | core                                |
-| `planning`   | `PathPlanner` interface, A*                           | core, world                          |
+| `planning`   | `PathPlanner` interface, A* with options, results, reused workspace | core, world            |
 | `tasks`      | task lifecycle, assignment, task generation           | core, robots                         |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
+| `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `view`       | camera, scene (draw list), input -> view logic; no SDL | core, world, simulation             |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
@@ -59,6 +60,15 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   exception and is compared with an epsilon).
 - The default `RobotSpec` is the idealised robot that the pre-state-machine tests assume. Do not change
   its defaults; give scenarios their own spec instead.
+- The path planner depends only on `core` and `world`; keep it free of robots, tasks, simulation and
+  rendering (its tests build into `warehousesim_planning_tests`, linked against `planning` and `testing`
+  only). Its results must stay deterministic: ordering keys must be unique and independent of the
+  standard library, so changing tie-breaking is a deliberate act that also updates the golden hash in
+  `ResultsAreReproducibleAcrossPlatforms`. A* behaviour changes need a matching check against the
+  reference search in `tests/astar_reference_test.cpp`. Do not reintroduce per-search allocation:
+  `planning_alloc_test.cpp` must stay green.
+- Benchmarks (`bench/`) never assert on timing, since that flakes. They cross-check results instead, and
+  numbers are only quoted from an optimised build. `src/` must never depend on `testing/`.
 - Depend on interfaces at module seams (`PathPlanner`, `TaskAssigner`) and inject implementations through
   constructors. No global or singleton state.
 - Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them
