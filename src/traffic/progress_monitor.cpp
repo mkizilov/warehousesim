@@ -44,6 +44,10 @@ std::optional<RobotId> ProgressMonitor::waitingFor(RobotId robot) const {
   return waitsFor_[index(robot)];
 }
 
+std::optional<core::Point> ProgressMonitor::anchor(RobotId robot) const {
+  return anchor_[index(robot)];
+}
+
 std::vector<RobotId> ProgressMonitor::stuck(std::uint32_t minTicks) const {
   std::vector<RobotId> result;
   for (std::size_t i = 0; i < stuck_.size(); ++i) {

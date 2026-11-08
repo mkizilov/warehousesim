@@ -24,7 +24,7 @@ core ← robots ──────────┴← tasks ┐
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
 | `metrics`    | simulated performance figures from plain observations: aggregation, derived rates, CSV and dashboard text (see Performance metrics); depends on `core` only |
-| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios, `MetricsCollector`, benchmark sweeps |
+| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios, `MetricsCollector`, benchmark sweeps, run recording and replay (see Recording and replay) |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing (see Map editor) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize) and its file glue; no SDL, no GUI |
 | `view`       | `Camera`, draw lists (`buildScene()`, `buildFleetScene()`, `buildEditorScene()`), `ViewController`, `FleetController`, `FleetSession`, `EditorController`; no SDL, fully tested |
@@ -80,6 +80,8 @@ build/default/apps/warehousesim_editor --file my-hall.json               # edit 
 build/default/apps/warehousesim_cli --map my-hall.json --ticks 500       # run a map made with it
 build/default/apps/warehousesim_cli --layout compact --ticks 3000 --metrics --metrics-csv out/compact
 build/release/bench/warehousesim_fleet_bench                              # layouts x fleet sizes x seeds
+build/default/apps/warehousesim_cli --layout compact --ticks 600 --seed 7 --record run.json   # also write down the run
+build/default/apps/warehousesim_cli --replay run.json                    # play it back and check it
 ```
 
 Both `warehousesim_cli` and `warehousesim_gui` take `--map FILE` instead of `--layout NAME` (not both).
@@ -92,7 +94,9 @@ default 60), `--frames N` (exit after N frames; 0 = until closed), `--metrics-cs
 the performance figures; the folder of BASE must exist).
 
 `warehousesim_cli` also takes `--metrics` (print the simulated performance dashboard to stderr after the
-run; the JSON on stdout is the same with or without it) and `--metrics-csv BASE` (write the three CSV files).
+run; the JSON on stdout is the same with or without it) and `--metrics-csv BASE` (write the three CSV files),
+and `--record FILE` and `--replay FILE` (see Recording and replay). `warehousesim_gui --record FILE` writes
+the recording of the session, with every command given through the interface, when the window closes.
 
 `warehousesim_gui` is the fleet management interface: the map on the left, a panel on the right with the
 robots, the selected robot, the active and finished tasks, and a prompt. See "Fleet interface" below for
@@ -598,9 +602,12 @@ The interface and the simulation meet in one place, and it is narrow.
 ```
 
 - A `simulation::Command` is a plain value: `SubmitTask{pickup, dropoff, priority}`,
-  `SetTaskPriority{task, priority}` or `ResetScenario{seed?}`. `FleetController` (no SDL, no simulation
-  type but the snapshot it is shown) only *describes* what the user wants as commands. It cannot touch a
-  `Simulation`, because it is never given one.
+  `SetTaskPriority{task, priority}`, `CancelTask{task}`, `SetRobotService{robot, inService}`,
+  `PlaceObstacle{cell, type}`, `ClearObstacle{cell}` or `ResetScenario{seed?}`. The panel offers the first
+  two and the restart; the others are the same operations the engine always had, now as commands so that a
+  recording can hold them. `FleetController` (no SDL, no simulation type but the snapshot it is shown) only
+  *describes* what the user wants as commands. It cannot touch a `Simulation`, because it is never given
+  one.
 - `SimulationRunner::post()` queues a command (at most 256 wait; more are refused and the panel says so).
   The worker applies the queue in order, **between two steps** and also while paused, through
   `simulation::apply()`, which validates (a cell outside the map or not floor, the same pickup and dropoff,
@@ -621,7 +628,8 @@ The interface and the simulation meet in one place, and it is narrow.
   with a real runner and no window (`fleet_session_test.cpp`).
 
 Limits: the interface selects, adds tasks and changes priorities, but cannot cancel a task, take a robot out
-of service or edit the layout (the simulation can do all of these; they are not on the panel). A restart
+of service or edit the layout (these are commands, and a recording holds them, but they are not on the
+panel). A restart
 always keeps the seed it started with unless a `ResetScenario{seed}` command says otherwise (the GUI has no
 key for that). The panel is left out of windows smaller than 720 x 400. Text is the SDL debug font, so the
 panel is 39 characters wide and long messages wrap into two lines.
@@ -782,6 +790,119 @@ robots draw power in the model (idle drain 1 per tick).
 - The sampling windows (100 ticks, the latest 240 kept) bound the memory of a long run; only the dashboard
   chart and the series CSV use them.
 - A restart or a different seed is a different run: the figures start over, they are never carried across.
+
+## Recording and replay
+
+A run can be written down and played again, step for step, from its initial state, and the replay says
+where it goes wrong if it ever does. This is what the determinism of the engine buys: a run is a function of
+what it was built from and of what was done to it from outside, each thing after a whole number of steps.
+Those two things are all a recording needs, plus what lets a replay be checked.
+
+### What a recording holds
+
+| Part | Contents |
+|------|----------|
+| `scenario` | the layout as it was built (before any wall was put up), where each robot starts, the **random seed**, and every setting: the whole `SimulationConfig` and the robot model (`RobotSpec`) |
+| `commands` | every **user command**, in the order it was applied, with the tick it was applied at (after that many steps, before the next) and whether the simulation accepted it: `submitTask`, `setTaskPriority`, `cancelTask`, `setRobotService`, `placeObstacle`, `clearObstacle`. A refused command is kept too, so that the replay refuses it as well |
+| `taskEvents` | every **task created** (by the random generator, `source: engine`, or by a command) and every **task cancelled** (by a command, including the cancellation that follows from putting a wall on a cell a task starts or ends on), with the tick, the task number and, for a new task, its pickup, dropoff and priority |
+| `checkpoints`, `end` | `Simulation::stateChecksum()` at tick 0, every `checkpointInterval` ticks (default 100) and at the end of the run |
+| `ticks`, `engine` | how many steps were taken, and the revision of the engine that made it (`kEngineRevision`) |
+
+Time in a recording is simulated time, the tick; the steps are fixed (one tick each). There is no clock,
+user name, path or machine in the file. The order of events is stable by construction: commands are listed
+in the order they were applied; task events by tick, at one tick those of commands before those of the
+step, creations before cancellations, tasks in order of number. A file whose order is any other is refused.
+A 600-tick run of a bundled layout takes about 15 KB.
+
+### Using it
+
+```sh
+warehousesim_cli --layout compact --ticks 600 --seed 7 --record run.json [--checkpoint-interval 50]
+warehousesim_cli --replay run.json                  # prints the same final state as the run did
+warehousesim_cli --replay run.json --ticks 250      # only the first 250 ticks (an earlier state)
+warehousesim_cli --replay run.json --no-verify      # just play it, compare nothing
+warehousesim_gui --record session.json              # written when the window closes
+```
+
+A replay takes the layout, seed and settings from the file (so `--layout`, `--map`, `--seed` and `--record`
+are refused with it), plays it and compares it with the recording as it goes. Exit status 0 means the
+replay matched (it says how many checkpoints, and the end state); 1 means it did not, or the file is not a
+usable recording, with the reason on stderr and no final state on stdout. `--metrics` and `--metrics-csv`
+work on a replay too.
+
+In code: `simulation::Recorder` runs a simulation and records it (all changes go through it, so it cannot
+miss one), `SimulationRunner::startRecording()` / `recording()` does the same for the run in a window
+(commands are recorded with the tick the worker applied them at; a restart starts the recording over on the
+new run, as it does the command log), and `simulation::replay(recording, options)` plays one back. Files
+are read and written with `parseRecording` / `serializeRecording` / `loadRecordingFile` /
+`saveRecordingFile`.
+
+### Finding where a replay goes wrong
+
+`replay()` returns the state and the performance figures of the replay, and, if anything differed, a
+`Divergence`: the tick and what differs, in words. Checked as it goes, so the first difference is the one
+reported, and the replay stops there:
+
+- the **state checksum** at every checkpoint (tick 0 first, which also catches a recording made by an
+  engine that builds its scenario differently) and at the end;
+- whether each **command** was accepted or refused as recorded (a recorded "accepted" that the replay
+  refuses reports the reason the engine gave);
+- every **task event**, one by one ("the recording has task #7 created at tick 40 ..., but the replay made
+  task #7 created at tick 40 ..."), and that none the recording has is missing or extra.
+
+So a change to any input, setting, command or the engine itself is found at the first tick where it shows,
+not just at the end, and usually at the event before the first checksum that would show it. A divergence
+from a recording made by another `engine` revision says so. A recording that cannot be replayed at all
+(not consistent, a scenario that cannot be built, an engine error) comes back as a divergence at tick 0
+or wherever it happened; `replay()` throws for no recording.
+
+The checksum covers everything that decides the next step or that a snapshot shows: tick, layout, every
+robot (pose, speed, battery, route, motion, counters), every task ever made, the traffic, planning and
+recovery bookkeeping and the state of the random stream. It is FNV-1a over a canonical byte stream (fixed
+width, little-endian, doubles as IEEE bit patterns), so it is the same on every platform when the numbers
+are. It is not cryptographic: it finds accidental divergence, not tampering, and a recording is trusted
+input as far as being what it says it is (what is read from a file is validated and bounded).
+
+### The file
+
+A versioned JSON document (version 1, `format: "warehousesim-recording"`) with a strict schema: unknown and
+duplicate keys, wrong types, out-of-range numbers, inconsistent order and a scenario that cannot be built
+are refused with a JSON Pointer to the problem (`/commands/3/tick: tick 400 is after the end of the run`),
+never an exception or a crash. A reader that meets a newer version says so. The writer is canonical (equal
+recordings give equal text; reading then writing changes nothing) and saves through a temporary file and a
+rename. The keys are documented at the top of `recording_file.hpp`, and `RecordingFormatTest` pins the exact
+text of a small recording and of a recording made earlier that must keep replaying.
+
+Everything but `scenario` and `ticks` may be left out of a file made by hand. Commands with no
+`taskEvents`, `checkpoints` or `end` form a *scenario script*: it is played as it says and only the commands'
+`accepted` is compared.
+
+### Sources of nondeterminism and how each is handled
+
+| Source | Where it could enter | How it is handled |
+|--------|---------------------|-------------------|
+| Random numbers | the task generator | only `core::Rng` (SplitMix64: its output is fully specified, unlike `std::*_distribution`), seeded by `config.seed`, recorded; no `std::rand` or `std::random_device`. The stream's state is in the checksum, so a different seed is seen at tick 0 |
+| Wall-clock time, thread schedule | the runner steps in real time; clicks arrive whenever | the simulation never reads a clock. Steps are whole and fixed. Commands are applied only *between* steps, one at a time, in the order posted, and recorded with the tick they landed on: the timing decides *which* tick, and the recording keeps it. Pause, speed, frame rate, zoom and selection are not commands and never reach the state (`PausingAndChangingTheSpeed...`, `FleetDeterminismTest`) |
+| Floating point | the motion model uses `double` | only exactly specified IEEE-754 operations (`+ - * /`, `sqrt`, `fmod`, `floor`, `ceil`, `fabs`); no `-ffast-math`, and `-ffp-contract=off` so that no fused multiply-add changes a result; no libm transcendental in the simulation (`sin`, `cos`, `pow` are in the view code only). The checksum takes the bits |
+| Container order | hash containers | no decision depends on the iteration order of an `unordered_*`: they are only looked up (the traffic controller's route counts, the distance estimator's cache, the metrics accumulator's cell index, the planner's blocked set) or walked once to mark cells, where order cannot matter (the blocked set). Everything else is a `vector`, a `deque` or an ordered container, and ties are broken by id, never by position in memory |
+| Memory addresses, uninitialised memory | ordering or hashing by pointer; an unset member | nothing is ordered or hashed by address; members are initialised; the suites run clean under ASan, UBSan and TSan |
+| Integer width, byte order, locale | the checksum, the file | fixed-width types and a little-endian byte stream; numbers in the file are written locale-independently, doubles with the shortest text that reads back to the same bits (`EveryFieldOfTheConfigurationSurvivesTheRoundTrip`) |
+| Parallelism | none inside a simulation (it is single-threaded); several replays at once | a replay shares no state with another (`ReplaysOnOtherThreads...`, run under TSan) |
+| Things done to the simulation that the recording does not know | a wall put up, a robot disabled, a task made, before recording began; a planner or dispatcher of one's own | `RunJournal` compares the simulation with what its origin builds and refuses to start on any difference; it refuses a simulation built with its own planner or dispatcher, because a replay builds the default ones |
+| The engine itself changing | a new release | the `engine` revision, a pinned checksum (`ThePinnedScenarioHasThePinnedChecksums`) and a recording made earlier that must keep replaying (`ARecordingMadeEarlierStillReplays...`) force a deliberate change to be made on purpose; a recording of another revision that diverges says so |
+
+### Limits
+
+- A recording starts at tick 0, before the first task, of a simulation with the default planner and
+  dispatcher. A restart in the window starts a new recording; the part before it is not kept.
+- The CLI has no way to give commands, so a recording from it has none; commands come from the window
+  (`--record` on the GUI), from code (`Recorder`), or from a file edited by hand (a scenario script).
+- There is no way to *watch* a replay in the window: `--replay` is headless and prints the final state.
+- Replaying takes as long as running: a file may ask for up to 10^9 ticks and 4096 robots, and nothing
+  limits the time it takes. Files are limited to 64 MiB and layouts to 512 x 512.
+- Bit-for-bit agreement between machines rests on the arithmetic being IEEE as built. It has been run only
+  on Apple clang 21 (arm64), where the plain and the ASan+UBSan builds give the same checksums; the
+  recording kept as a fixture in the tests is how another platform's CI finds out.
 
 ## Map editor and map files
 

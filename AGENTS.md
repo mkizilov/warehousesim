@@ -32,7 +32,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
 | `metrics`    | simulated performance figures: `MetricsAccumulator` (plain observations in), `FleetMetrics` (counts and derived rates), CSV and dashboard text | core only |
-| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps | all of the above, metrics, nlohmann_json |
+| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps, run recording and replay (`RunJournal`, `Recorder`, `replay`, the recording file, `stateChecksum`) | all of the above, metrics, nlohmann_json |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing | core, world, nlohmann_json (private) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize), `editor_files` (save/load/predefined) | core, world, mapio (private) |
@@ -187,6 +187,33 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   and the task stream depends on the seed alone so that fleets are offered the same work. When the baseline
   table in the README is regenerated, regenerate all of it with the same command and say what it was
   built with; never edit a number by hand.
+- A run is a function of its `ScenarioSpec` (`Simulation::origin()`) and the `Command`s applied to it, each
+  after a whole number of steps. A recording (`recording.hpp`) is that plus the task events and a state
+  checksum every so often, and `replay()` plays it back from tick 0 and reports the first difference. Keep
+  it so:
+  - Everything that changes a `Simulation` from outside is a `Command` with an `apply` overload that validates
+    and refuses (never throws) and an entry in the file (`commandJson`/`readCommand`, the pinned text in
+    `RecordingFormatTest`). A public mutator of `Simulation` that no command wraps cannot be recorded: add
+    the command, or keep it out of the public interface. `RunJournal` refuses to start on a simulation that
+    was changed before recording began, or that was built with its own planner or dispatcher.
+  - `Simulation::stateChecksum()` (`state_checksum.cpp`) covers what decides the next step or what a
+    snapshot shows. New state goes into it in the same change, with a test in `state_checksum_test.cpp` that
+    makes it differ. It hashes `double` bit patterns, so the arithmetic must stay exact IEEE:
+    `-ffp-contract=off`, no fast-math, and no libm transcendental (`sin`, `cos`, `pow`, `atan2`, ...) in
+    `src/` outside `view`. Never decide anything from the iteration order of an `unordered_*` or from an
+    address, and never let a clock, a thread or a file reach `Simulation`.
+  - Changing what a simulation computes on purpose means, in the same change: raising `kEngineRevision`,
+    updating `ThePinnedScenarioHasThePinnedChecksums` and regenerating the fixture `kEarlierRecording` in
+    `replay_test.cpp`. A change that needs neither is behaviour-preserving, which is what to aim for.
+  - The file is a contract like the map file: `recording_file.hpp` documents it, reading stays strict (JSON
+    Pointer problems, never a throw or a crash on any input, bounded size, depth and counts) and writing
+    stays canonical. A field added to `SimulationConfig` or `RobotSpec` must be added to the format
+    (`TheFormatCoversEveryFieldOfTheConfigurationAndTheRobotModel` stops compiling until it is), and what
+    old readers cannot read needs a new `version`. Nothing about the machine or the time may go into a
+    recording: ticks only.
+  - `replay()` throws for no recording, compares as it goes (checkpoints, whether each command is accepted as
+    recorded, every task event) and stops at the first difference with its tick and a reason. The way
+    metrics are measured never changes what is replayed.
 - Everything the editor decides is in `editor` (the model) and `view::EditorController` (input to edits):
   both are tested without a display, with plain `InputEvents`. `rendering` only translates SDL events into
   `PointerAction`s and `EditorCommand`s, in the order they happened, and must not decide anything. Anything
@@ -243,6 +270,8 @@ build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfi
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # fleet interface smoke test, no window
 build/release/bench/warehousesim_fleet_bench                              # the baseline table of the README
 build/default/apps/warehousesim_cli --layout compact --ticks 500 --metrics --metrics-csv build/m   # dashboard + CSV
+build/default/apps/warehousesim_cli --layout compact --ticks 500 --seed 2 --record build/run.json   # record ...
+build/default/apps/warehousesim_cli --replay build/run.json                                         # ... and check the replay
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-map.json --layout compact --frames 30
 # (ctest also runs the headless CLI on every layout and on a map file, checks that equal seeds give
 # equal output, and that invalid maps are refused)

@@ -90,6 +90,16 @@ struct SimulationConfig {
   std::uint32_t abandonTicks = 150;
 };
 
+// Everything a Simulation is built from, as plain values: the layout as it was before anything
+// was edited, where each robot starts (robot N is the Nth start) and the configuration, which
+// includes the seed. A Simulation built from the same spec behaves exactly like the one it came
+// from, which is what a recording relies on (see recording.hpp).
+struct ScenarioSpec {
+  world::Warehouse warehouse;
+  std::vector<core::Point> robotStarts;
+  SimulationConfig config;
+};
+
 // What cooperative planning, blocking detection and recovery have done so far.
 struct PlanningStats {
   std::uint64_t searches = 0;         // cooperative searches run
@@ -203,6 +213,8 @@ class Simulation {
   Simulation(world::Warehouse warehouse, const std::vector<core::Point>& robotStarts,
              SimulationConfig config = {}, std::unique_ptr<planning::PathPlanner> planner = nullptr,
              std::unique_ptr<tasks::Dispatcher> dispatcher = nullptr);
+  // The same, from a spec (with the default planner and dispatcher).
+  explicit Simulation(const ScenarioSpec& spec);
 
   // Adds a task to the queue. Throws std::invalid_argument unless both locations are walkable.
   // A task whose route cannot be driven is not refused here; the dispatcher rejects it (it ends
@@ -242,6 +254,17 @@ class Simulation {
   void run(core::Tick ticks);
 
   [[nodiscard]] core::Tick tick() const noexcept { return clock_.tick(); }
+  // What this simulation was built from, unchanged by anything that happened since.
+  [[nodiscard]] const ScenarioSpec& origin() const noexcept { return origin_; }
+  // Built with the default planner and dispatcher, so that origin() is enough to build another one
+  // that behaves the same. False if either was supplied.
+  [[nodiscard]] bool usesDefaultComponents() const noexcept { return defaultComponents_; }
+  // A 64-bit digest of the whole state that decides what happens next and everything the
+  // snapshot shows: tick, layout, every robot and task, the counters, the random stream, and the
+  // bookkeeping of planning and recovery. Equal runs have equal checksums at equal ticks (see
+  // core::Checksum for what that rests on); a state that differs anywhere in it almost surely has
+  // a different one. For telling a replay from its recording; not a hash of a Snapshot.
+  [[nodiscard]] std::uint64_t stateChecksum() const;
   [[nodiscard]] const SimulationConfig& config() const noexcept { return config_; }
   [[nodiscard]] const world::World& world() const noexcept { return world_; }
   [[nodiscard]] const world::Warehouse& warehouse() const noexcept { return world_.layout(); }
@@ -320,6 +343,10 @@ class Simulation {
   void abortNavigation(robots::Robot& robot);
   [[nodiscard]] robots::Robot& robotById(core::RobotId id);
 
+  // What the simulation was built from. Declared first: the constructor copies the layout before
+  // world_ takes it.
+  ScenarioSpec origin_;
+  bool defaultComponents_;
   // Kept in lock-step with the robots' own positions: every move goes through world_.
   world::World world_;
   std::vector<robots::Robot> robots_;

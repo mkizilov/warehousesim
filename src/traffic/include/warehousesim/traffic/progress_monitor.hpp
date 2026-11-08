@@ -40,6 +40,8 @@ class ProgressMonitor {
 
   [[nodiscard]] std::uint32_t stuckTicks(core::RobotId robot) const;
   [[nodiscard]] std::optional<core::RobotId> waitingFor(core::RobotId robot) const;
+  // Where the robot was when it began to wait, if it is waiting.
+  [[nodiscard]] std::optional<core::Point> anchor(core::RobotId robot) const;
 
   // The robots stuck for at least `minTicks`, in id order.
   [[nodiscard]] std::vector<core::RobotId> stuck(std::uint32_t minTicks) const;

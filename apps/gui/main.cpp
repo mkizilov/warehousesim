@@ -7,6 +7,10 @@
 //   1-4  priority of the new or the selected task   Space  pause   [ ] slower / faster   R  restart
 //   P / O  routes / held cells   wheel +/- zoom   middle or right drag, arrows, WASD pan   0  fit
 //   Esc  cancel, clear the selection, quit
+//
+// With --record FILE the run is written down as it happens (every command the interface posts, at
+// the tick it was applied) and saved when the window closes; `warehousesim_cli --replay FILE` plays
+// it back and checks it.
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -18,9 +22,11 @@
 
 #include "arguments.hpp"
 #include "metrics_output.hpp"
+#include "recording_output.hpp"
 #include "simulation_source.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/rendering/sdl_window.hpp"
+#include "warehousesim/simulation/recording_file.hpp"
 #include "warehousesim/simulation/runner.hpp"
 #include "warehousesim/view/fleet_controller.hpp"
 #include "warehousesim/view/fleet_scene.hpp"
@@ -36,7 +42,13 @@ constexpr std::uint64_t kMaxFps = 1000;
 void printUsage(std::ostream& out) {
   out << "usage: warehousesim_gui [--seed N] [--layout NAME | --map FILE] [--tick-ms N]\n"
          "                        [--speed X] [--fps N] [--frames N] [--metrics-csv BASE]\n"
+         "                        [--record FILE [--checkpoint-interval N]]\n"
          "  --map FILE   run a map made with warehousesim_editor instead of a layout\n"
+         "  --record FILE  write a recording of the run (with the commands given to the "
+         "interface)\n"
+         "               when the window closes; play it back with warehousesim_cli --replay FILE\n"
+         "  --checkpoint-interval N  ticks between the state checksums a recording keeps\n"
+         "               (default 100; 0: only at the start and the end)\n"
          "  --metrics-csv BASE  where the E key writes the (simulated) performance figures:\n"
          "               BASE.runs.csv, BASE.robots.csv and BASE.series.csv\n"
          "  --tick-ms N  fixed simulation step, in real milliseconds at speed 1 (default 100)\n"
@@ -56,10 +68,15 @@ int main(int argc, char** argv) {
   std::uint64_t maxFrames = 0;
   double speed = 1.0;
   warehousesim::apps::WarehouseSource source;
+  std::uint64_t checkpointInterval = warehousesim::simulation::kDefaultCheckpointInterval;
   std::string metricsBase;
+  std::string recordFile;
   bool failed = false;
   for (int i = 1; i < argc && !failed; ++i) {
     if (warehousesim::apps::readStringOption(argc, argv, i, "--metrics-csv", metricsBase, failed) ||
+        warehousesim::apps::readStringOption(argc, argv, i, "--record", recordFile, failed) ||
+        warehousesim::apps::readUnsignedOption(argc, argv, i, "--checkpoint-interval",
+                                               checkpointInterval, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--seed", seed, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--tick-ms", tickMs, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--fps", fps, failed) ||
@@ -81,6 +98,9 @@ int main(int argc, char** argv) {
   if (!metricsBase.empty() && !warehousesim::apps::metricsBaseUsable(metricsBase, std::cerr)) {
     return 2;
   }
+  if (!recordFile.empty() && !warehousesim::apps::recordingFileUsable(recordFile, std::cerr)) {
+    return 2;
+  }
 
   try {
     auto made = warehousesim::apps::makeScenario(source, std::cerr);
@@ -100,6 +120,9 @@ int main(int argc, char** argv) {
         std::move(first),
         std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)),
         *made.scenario);
+    if (!recordFile.empty()) {
+      runner.startRecording(checkpointInterval);
+    }
     warehousesim::rendering::SdlWindow window("WarehouseSim fleet", 1280, 720);
     warehousesim::view::FleetController controller(window.renderSize(), runner.warehouse(), speed);
     runner.setSpeed(controller.speed());
@@ -136,6 +159,21 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_until(frameStart + frameBudget);
     }
     runner.stop();
+    if (!recordFile.empty()) {
+      if (const auto recording = runner.recording()) {
+        if (const auto problem =
+                warehousesim::simulation::saveRecordingFile(recordFile, *recording)) {
+          std::cerr << "error: " << problem->text() << '\n';
+          return 1;
+        }
+        std::cerr << "recorded " << recording->ticks << " ticks to " << recordFile << " ("
+                  << recording->commands.size() << " commands)\n";
+      } else {
+        std::cerr << "error: the run was restarted into a scenario that cannot be recorded; "
+                  << recordFile << " was not written\n";
+        return 1;
+      }
+    }
   } catch (const std::exception& error) {
     std::cerr << "error: " << error.what() << '\n';
     return 1;

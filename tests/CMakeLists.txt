@@ -21,6 +21,7 @@ endfunction()
 # JSON or SDL, this target would stop building.
 warehousesim_add_test(warehousesim_world_tests
   SOURCES
+    checksum_test.cpp
     core_test.cpp
     layout_check_test.cpp
     layouts_test.cpp
@@ -121,13 +122,18 @@ warehousesim_add_test(warehousesim_tests
     map_simulation_test.cpp
     metrics_collector_test.cpp
     movement_test.cpp
+    recording_file_test.cpp
+    recording_test.cpp
+    replay_test.cpp
     runner_commands_test.cpp
     runner_metrics_test.cpp
+    runner_recording_test.cpp
     runner_test.cpp
     scenario_options_test.cpp
     scene_test.cpp
     simulation_dispatch_test.cpp
     simulation_test.cpp
+    state_checksum_test.cpp
     view_controller_test.cpp
   LIBS warehousesim::view warehousesim::simulation warehousesim::mapio)
 

@@ -114,6 +114,20 @@ std::uint64_t SimulationRunner::seed() const {
   return simulation_.config().seed;
 }
 
+void SimulationRunner::startRecording(core::Tick checkpointInterval) {
+  const std::scoped_lock lock(mutex_);
+  journal_.emplace(simulation_, checkpointInterval);
+  checkpointInterval_ = checkpointInterval;
+}
+
+std::optional<Recording> SimulationRunner::recording() const {
+  const std::scoped_lock lock(mutex_);
+  if (!journal_) {
+    return std::nullopt;
+  }
+  return journal_->recording(simulation_);
+}
+
 metrics::FleetMetrics SimulationRunner::metrics() const {
   const std::scoped_lock lock(mutex_);
   return collector_.report();
@@ -162,13 +176,10 @@ CommandOutcome SimulationRunner::restart(const ResetScenario& command) {
 }
 
 CommandOutcome SimulationRunner::execute(const Command& command) {
-  if (const auto* submit = std::get_if<SubmitTask>(&command)) {
-    return apply(simulation_, *submit);
+  if (const auto* reset = std::get_if<ResetScenario>(&command)) {
+    return restart(*reset);
   }
-  if (const auto* priority = std::get_if<SetTaskPriority>(&command)) {
-    return apply(simulation_, *priority);
-  }
-  return restart(std::get<ResetScenario>(command));
+  return simulation::apply(simulation_, command);  // qualified: std::apply would be found too
 }
 
 bool SimulationRunner::applyQueued() {
@@ -180,9 +191,20 @@ bool SimulationRunner::applyQueued() {
     Command command = std::move(commands_.front());
     commands_.pop_front();
     CommandOutcome outcome = execute(command);
-    if (outcome.accepted && std::holds_alternative<ResetScenario>(command)) {
-      log_.clear();
-      restarted = true;
+    if (std::holds_alternative<ResetScenario>(command)) {
+      if (outcome.accepted) {
+        log_.clear();
+        restarted = true;
+        if (journal_) {
+          try {
+            journal_.emplace(simulation_, checkpointInterval_);
+          } catch (const std::exception&) {
+            journal_.reset();  // the new run is not one that can be recorded
+          }
+        }
+      }
+    } else if (journal_) {
+      journal_->commandApplied(simulation_, command, outcome.accepted);
     }
     log_.push_back({simulation_.tick(), std::move(command), std::move(outcome)});
   }
@@ -246,6 +268,9 @@ void SimulationRunner::loop() {
       beforeLastStep = simulation_.snapshot();
       simulation_.step();
       collector_.observe(simulation_);
+      if (journal_) {
+        journal_->stepTaken(simulation_);
+      }
       stepped = true;
       --due;
     }

@@ -63,6 +63,15 @@ jobs:
       - name: Fleet benchmark (simulated figures; fails on a collision or an unaccounted task)
         if: matrix.preset == 'release'
         run: build/release/bench/warehousesim_fleet_bench
+      - name: Record and replay every predefined layout (the replay must match, byte for byte)
+        run: |
+          for layout in demo compact fulfilment; do
+            build/${{ matrix.preset }}/apps/warehousesim_cli --layout $layout --ticks 300 --seed 2 \
+              --record build/ci-$layout.rec.json > build/ci-$layout.run.json
+            build/${{ matrix.preset }}/apps/warehousesim_cli --replay build/ci-$layout.rec.json \
+              > build/ci-$layout.replay.json
+            cmp build/ci-$layout.run.json build/ci-$layout.replay.json
+          done
       - name: Metrics dashboard text and CSV export (headless)
         run: |
           build/${{ matrix.preset }}/apps/warehousesim_cli --layout compact --ticks 300 --seed 1 \

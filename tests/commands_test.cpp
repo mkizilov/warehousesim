@@ -7,19 +7,29 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "scenario_support.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/serialization.hpp"
+#include "warehousesim/world/cell_type.hpp"
 
 namespace {
 
 using namespace warehousesim_test;
 using warehousesim::simulation::apply;
+using warehousesim::simulation::CancelTask;
+using warehousesim::simulation::ClearObstacle;
+using warehousesim::simulation::Command;
+using warehousesim::simulation::commandName;
 using warehousesim::simulation::CommandOutcome;
+using warehousesim::simulation::PlaceObstacle;
+using warehousesim::simulation::ResetScenario;
+using warehousesim::simulation::SetRobotService;
 using warehousesim::simulation::SetTaskPriority;
 using warehousesim::simulation::SubmitTask;
+using warehousesim::world::CellType;
 
 // Idle robots, no random tasks: a task exists only if a command made it.
 Simulation quiet() {
@@ -316,6 +326,159 @@ TEST(CommandsTest, TaskCommandsDoNotDisturbTheRandomTaskStream) {
     return made;
   };
   EXPECT_EQ(generated(false), generated(true));
+}
+
+// ---- cancelling a task, a robot's service, the layout -------------------------------------------
+
+TEST(CommandsTest, AnOpenTaskIsCancelledAndTheRobotHoldingItStops) {
+  Simulation sim = quiet();
+  const TaskId id = *apply(sim, SubmitTask{P(0, 0), P(6, 0)}).task;
+  sim.run(3);
+  ASSERT_EQ(sim.tasks().find(id)->status, TaskStatus::Assigned);
+  const CommandOutcome outcome = apply(sim, CancelTask{id});
+  EXPECT_TRUE(outcome.accepted);
+  EXPECT_EQ(outcome.task, id);
+  EXPECT_TRUE(mentions(outcome, "task #1 cancelled")) << outcome.message;
+  EXPECT_EQ(sim.tasks().find(id)->status, TaskStatus::Cancelled);
+  for (const auto& robot : sim.robots()) {
+    EXPECT_FALSE(robot.task().has_value());
+  }
+  EXPECT_EQ(sim.snapshot().cancelledTasks, 1U);
+}
+
+TEST(CommandsTest, ATaskThatDoesNotExistOrIsFinishedCannotBeCancelled) {
+  Simulation sim = quiet();
+  const std::string before = json(sim);
+  const CommandOutcome unknown = apply(sim, CancelTask{TaskId{9}});
+  EXPECT_FALSE(unknown.accepted);
+  EXPECT_TRUE(mentions(unknown, "there is no task #9")) << unknown.message;
+  EXPECT_EQ(json(sim), before);
+
+  const TaskId id = *apply(sim, SubmitTask{P(0, 0), P(6, 0)}).task;
+  sim.run(60);
+  ASSERT_EQ(sim.tasks().find(id)->status, TaskStatus::Completed);
+  const CommandOutcome done = apply(sim, CancelTask{id});
+  EXPECT_FALSE(done.accepted);
+  EXPECT_TRUE(mentions(done, "completed")) << done.message;
+  EXPECT_TRUE(mentions(done, "only an open task")) << done.message;
+  EXPECT_EQ(sim.tasks().find(id)->status, TaskStatus::Completed);
+  EXPECT_FALSE(apply(sim, CancelTask{TaskId{}}).accepted);  // the invalid id 0
+}
+
+TEST(CommandsTest, ARobotIsTakenOutOfServiceAndPutBack) {
+  Simulation sim = quiet();
+  const CommandOutcome off = apply(sim, SetRobotService{RobotId{2}, false});
+  EXPECT_TRUE(off.accepted);
+  EXPECT_TRUE(mentions(off, "robot #2 taken out of service")) << off.message;
+  EXPECT_EQ(sim.robots()[1].state(), warehousesim::robots::RobotState::Unavailable);
+  const CommandOutcome on = apply(sim, SetRobotService{RobotId{2}, true});
+  EXPECT_TRUE(on.accepted);
+  EXPECT_TRUE(mentions(on, "robot #2 back in service")) << on.message;
+  EXPECT_EQ(sim.robots()[1].state(), warehousesim::robots::RobotState::Idle);
+}
+
+TEST(CommandsTest, ARobotThatIsNotThereOrAlreadyHasThatServiceIsRefused) {
+  Simulation sim = quiet();
+  const std::string before = json(sim);
+  EXPECT_TRUE(mentions(apply(sim, SetRobotService{RobotId{3}, false}), "there is no robot #3"));
+  EXPECT_TRUE(mentions(apply(sim, SetRobotService{RobotId{}, true}), "there is no robot #0"));
+  const CommandOutcome already = apply(sim, SetRobotService{RobotId{1}, true});
+  EXPECT_FALSE(already.accepted);
+  EXPECT_TRUE(mentions(already, "robot #1 is already in service")) << already.message;
+  EXPECT_EQ(json(sim), before);
+  ASSERT_TRUE(apply(sim, SetRobotService{RobotId{1}, false}).accepted);
+  const CommandOutcome twice = apply(sim, SetRobotService{RobotId{1}, false});
+  EXPECT_FALSE(twice.accepted);
+  EXPECT_TRUE(mentions(twice, "robot #1 is already out of service")) << twice.message;
+}
+
+TEST(CommandsTest, AWallGoesUpOnFreeFloorAndComesDownAgain) {
+  Simulation sim = quiet();
+  EXPECT_TRUE(sim.warehouse().isWalkable(P(3, 1)));
+  const CommandOutcome up = apply(sim, PlaceObstacle{P(3, 1), CellType::Wall});
+  EXPECT_TRUE(up.accepted);
+  EXPECT_TRUE(mentions(up, "wall put up at (3, 1)")) << up.message;
+  EXPECT_EQ(sim.warehouse().at(P(3, 1)), CellType::Wall);
+  EXPECT_TRUE(apply(sim, PlaceObstacle{P(4, 1), CellType::Shelf}).accepted);
+  EXPECT_EQ(sim.warehouse().at(P(4, 1)), CellType::Shelf);
+  const CommandOutcome down = apply(sim, ClearObstacle{P(3, 1)});
+  EXPECT_TRUE(down.accepted);
+  EXPECT_TRUE(mentions(down, "taken down at (3, 1)")) << down.message;
+  EXPECT_EQ(sim.warehouse().at(P(3, 1)), CellType::Free);
+  EXPECT_TRUE(apply(sim, ClearObstacle{P(0, 2)}).accepted);  // a shelf of the layout
+}
+
+TEST(CommandsTest, ObstacleCommandsGiveAReasonForEveryCellThatCannotTakeThem) {
+  Simulation sim = quiet();
+  const std::string before = json(sim);
+  const auto refused = [&](const Command& command, const std::string& reason) {
+    const CommandOutcome outcome = apply(sim, command);
+    EXPECT_FALSE(outcome.accepted) << commandName(command);
+    EXPECT_TRUE(mentions(outcome, reason)) << outcome.message << " should mention " << reason;
+  };
+  refused(PlaceObstacle{P(-1, 0), CellType::Wall}, "(-1, 0) is outside the map");
+  refused(PlaceObstacle{P(7, 0), CellType::Wall}, "outside the map");
+  refused(PlaceObstacle{P(0, 2), CellType::Wall}, "(0, 2) is a shelf, not free floor");
+  refused(PlaceObstacle{P(0, 0), CellType::Wall}, "is a pickup, not free floor");
+  refused(PlaceObstacle{P(0, 3), CellType::Wall}, "is a charging, not free floor");
+  refused(PlaceObstacle{P(2, 3), CellType::Wall}, "a robot stands on or holds (2, 3)");
+  refused(PlaceObstacle{P(3, 1), CellType::Pickup}, "is not something that can be put up");
+  refused(PlaceObstacle{P(3, 1), CellType::Free}, "is not something that can be put up");
+  refused(ClearObstacle{P(3, 1)}, "(3, 1) is not a wall or a shelf; there is nothing to take down");
+  refused(ClearObstacle{P(0, 0)}, "there is nothing to take down");
+  refused(ClearObstacle{P(-5, 9)}, "(-5, 9) is outside the map");
+  EXPECT_EQ(json(sim), before) << "a refused command changes nothing";
+}
+
+TEST(CommandsTest, AnyCommandGoesThroughTheVariantAndOnlyAResetIsRefused) {
+  Simulation sim = quiet();
+  const std::vector<Command> commands = {SubmitTask{P(0, 0), P(6, 0), TaskPriority::High},
+                                         SetTaskPriority{TaskId{1}, TaskPriority::Low},
+                                         PlaceObstacle{P(3, 1), CellType::Wall},
+                                         ClearObstacle{P(3, 1)},
+                                         SetRobotService{RobotId{1}, false},
+                                         CancelTask{TaskId{1}}};
+  for (const Command& command : commands) {
+    EXPECT_TRUE(apply(sim, command).accepted) << commandName(command);
+  }
+  const std::string before = json(sim);
+  // (A named variable: `apply(sim, Command{...})` would find std::apply through the variant.)
+  const Command resetCommand = ResetScenario{};
+  const CommandOutcome reset = apply(sim, resetCommand);
+  EXPECT_FALSE(reset.accepted);
+  EXPECT_TRUE(mentions(reset, "only a runner")) << reset.message;
+  EXPECT_EQ(json(sim), before);
+}
+
+TEST(CommandsTest, EveryCommandHasItsOwnName) {
+  const std::vector<Command> all = {SubmitTask{},      SetTaskPriority{}, CancelTask{},
+                                    SetRobotService{}, PlaceObstacle{},   ClearObstacle{},
+                                    ResetScenario{}};
+  ASSERT_EQ(all.size(), std::variant_size_v<Command>) << "a command was added: give it a test here";
+  std::set<std::string> names;
+  for (const Command& command : all) {
+    names.insert(commandName(command));
+  }
+  EXPECT_EQ(names.size(), all.size());
+  // The names are the ones a recording file uses (recording_file_test.cpp compares the two).
+  const std::vector<std::string> expected = {"submitTask",      "setTaskPriority", "cancelTask",
+                                             "setRobotService", "placeObstacle",   "clearObstacle",
+                                             "resetScenario"};
+  for (std::size_t i = 0; i < all.size(); ++i) {
+    EXPECT_EQ(std::string(commandName(all[i])), expected[i]) << i;
+  }
+}
+
+TEST(CommandsTest, TheNewCommandsAreComparableValues) {
+  EXPECT_TRUE(CancelTask{TaskId{4}} == CancelTask{TaskId{4}});
+  EXPECT_FALSE(CancelTask{TaskId{4}} == CancelTask{TaskId{5}});
+  EXPECT_TRUE((SetRobotService{RobotId{1}, true}) == (SetRobotService{RobotId{1}, true}));
+  EXPECT_FALSE((SetRobotService{RobotId{1}, true}) == (SetRobotService{RobotId{1}, false}));
+  EXPECT_TRUE((PlaceObstacle{P(1, 1), CellType::Wall}) == (PlaceObstacle{P(1, 1), CellType::Wall}));
+  EXPECT_FALSE((PlaceObstacle{P(1, 1), CellType::Wall}) ==
+               (PlaceObstacle{P(1, 1), CellType::Shelf}));
+  EXPECT_TRUE(ClearObstacle{P(2, 2)} == ClearObstacle{P(2, 2)});
+  EXPECT_FALSE(Command{CancelTask{TaskId{1}}} == Command{ClearObstacle{P(0, 0)}});
 }
 
 }  // namespace

@@ -9,6 +9,7 @@
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/tasks/task.hpp"
+#include "warehousesim/world/cell_type.hpp"
 
 namespace warehousesim::simulation {
 
@@ -39,6 +40,36 @@ struct SetTaskPriority {
   bool operator==(const SetTaskPriority&) const = default;
 };
 
+// Withdraws a task that has not finished. A robot working on it stops.
+struct CancelTask {
+  core::TaskId task;
+
+  bool operator==(const CancelTask&) const = default;
+};
+
+// Takes a robot out of service, or puts it back (see Simulation::disableRobot and restoreRobot).
+struct SetRobotService {
+  core::RobotId robot;
+  bool inService = true;
+
+  bool operator==(const SetRobotService&) const = default;
+};
+
+// Puts up a wall or a shelf on a free floor cell no robot stands on or holds, and takes one down
+// (see Simulation::placeObstacle and clearObstacle).
+struct PlaceObstacle {
+  core::Point cell;
+  world::CellType type = world::CellType::Wall;
+
+  bool operator==(const PlaceObstacle&) const = default;
+};
+
+struct ClearObstacle {
+  core::Point cell;
+
+  bool operator==(const ClearObstacle&) const = default;
+};
+
 // Starts the scenario over: a new simulation at tick 0, from `seed` or, if none, the seed of the
 // one being replaced. Handled by the runner, which owns the way to build a scenario.
 struct ResetScenario {
@@ -47,7 +78,9 @@ struct ResetScenario {
   bool operator==(const ResetScenario&) const = default;
 };
 
-using Command = std::variant<SubmitTask, SetTaskPriority, ResetScenario>;
+// Everything but ResetScenario changes a simulation by itself, and is what a recording keeps.
+using Command = std::variant<SubmitTask, SetTaskPriority, CancelTask, SetRobotService,
+                             PlaceObstacle, ClearObstacle, ResetScenario>;
 
 // What came of a command. A refused command changes nothing.
 struct CommandOutcome {
@@ -72,5 +105,15 @@ struct CommandRecord {
 // for any value of the command.
 CommandOutcome apply(Simulation& simulation, const SubmitTask& command);
 CommandOutcome apply(Simulation& simulation, const SetTaskPriority& command);
+CommandOutcome apply(Simulation& simulation, const CancelTask& command);
+CommandOutcome apply(Simulation& simulation, const SetRobotService& command);
+CommandOutcome apply(Simulation& simulation, const PlaceObstacle& command);
+CommandOutcome apply(Simulation& simulation, const ClearObstacle& command);
+// Any command a simulation can take by itself. ResetScenario is refused: only a runner can start a
+// scenario over.
+CommandOutcome apply(Simulation& simulation, const Command& command);
+
+// "submitTask", "cancelTask", ...: for messages.
+[[nodiscard]] const char* commandName(const Command& command) noexcept;
 
 }  // namespace warehousesim::simulation

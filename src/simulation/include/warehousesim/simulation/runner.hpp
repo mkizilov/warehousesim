@@ -15,6 +15,7 @@
 #include "warehousesim/metrics/fleet_metrics.hpp"
 #include "warehousesim/simulation/commands.hpp"
 #include "warehousesim/simulation/metrics_collector.hpp"
+#include "warehousesim/simulation/recording.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/simulation.hpp"
 #include "warehousesim/world/warehouse.hpp"
@@ -90,6 +91,18 @@ class SimulationRunner {
   // the state of the run at any tick.
   [[nodiscard]] std::uint64_t seed() const;
 
+  // Starts keeping a recording of the run (see recording.hpp): every command applied and every step
+  // taken from now on is written down, with a checksum of the state every `checkpointInterval`
+  // ticks, so that recording() can hand over a file that replays the run. Only possible at the very
+  // start (tick 0, no task made yet), and for a simulation with the default planner and
+  // dispatcher: throws std::invalid_argument otherwise. A restart (ResetScenario) starts the
+  // recording over on the new run, as it does the command log; if the new run cannot be recorded,
+  // recording stops. Costs a copy of the layout and a few bytes per command and task.
+  void startRecording(core::Tick checkpointInterval = kDefaultCheckpointInterval);
+  // The recording of the run in progress, as of now, or nothing if none is being kept. A copy, safe
+  // to ask from any thread.
+  [[nodiscard]] std::optional<Recording> recording() const;
+
   // The performance figures of the run in progress (since the start, or the last restart): every
   // step the worker has taken, none missed. A copy, safe to read from any thread. Measuring only
   // reads the simulation; a runner's state is the same with or without anyone asking.
@@ -131,9 +144,11 @@ class SimulationRunner {
   double frozenAlpha_ = 0.0;                           // where the display stands while not ticking
   bool ticking_ = false;                               // the worker is currently stepping on time
   std::optional<core::Tick> untilTick_;
-  std::uint64_t controlEpoch_ = 0;  // bumped by setPaused/setSpeed/post to cut a sleep short
-  std::deque<Command> commands_;    // posted, not yet applied
-  std::vector<CommandRecord> log_;  // applied during the current run
+  std::uint64_t controlEpoch_ = 0;     // bumped by setPaused/setSpeed/post to cut a sleep short
+  std::deque<Command> commands_;       // posted, not yet applied
+  std::vector<CommandRecord> log_;     // applied during the current run
+  std::optional<RunJournal> journal_;  // set while a recording is being kept
+  core::Tick checkpointInterval_ = kDefaultCheckpointInterval;
   std::uint64_t restarts_ = 0;
   bool stopRequested_ = false;
   bool paused_ = false;

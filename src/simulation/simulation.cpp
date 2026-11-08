@@ -25,7 +25,9 @@ constexpr int kMaxMotionRounds = 8;
 Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& robotStarts,
                        SimulationConfig config, std::unique_ptr<planning::PathPlanner> planner,
                        std::unique_ptr<tasks::Dispatcher> dispatcher)
-    : world_(std::move(warehouse)),
+    : origin_{warehouse, robotStarts, config},
+      defaultComponents_(planner == nullptr && dispatcher == nullptr),
+      world_(std::move(warehouse)),
       chargers_(world_.layout().cellsOfType(world::CellType::Charging)),
       traffic_(world_.layout(), config.reservationHorizon),
       planner_(planner ? std::move(planner) : std::make_unique<planning::AStarPlanner>()),
@@ -77,6 +79,9 @@ Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& rob
     }
   }
 }
+
+Simulation::Simulation(const ScenarioSpec& spec)
+    : Simulation(spec.warehouse, spec.robotStarts, spec.config) {}
 
 core::TaskId Simulation::submitTask(Point pickup, Point dropoff, tasks::TaskPriority priority) {
   if (!world_.isWalkable(pickup) || !world_.isWalkable(dropoff)) {
