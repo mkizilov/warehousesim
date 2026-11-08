@@ -48,10 +48,19 @@ endif()
 # need no world, planner, simulation, rendering or SDL.
 warehousesim_add_test(warehousesim_robot_tests
   SOURCES
+    forecast_test.cpp
     motion_test.cpp
     robot_motion_test.cpp
     robots_test.cpp
   LIBS warehousesim::robots)
+
+# The space-time reservation table and the traffic controller need the grid and robots but no
+# planner, tasks, simulation, rendering or SDL.
+warehousesim_add_test(warehousesim_traffic_tests
+  SOURCES
+    reservation_table_test.cpp
+    traffic_controller_test.cpp
+  LIBS warehousesim::traffic)
 
 # Task queue, estimators, generator and dispatcher need the planner and robots but no simulation,
 # rendering or SDL. The reference search and map generators come from testing/.
@@ -68,6 +77,7 @@ warehousesim_add_test(warehousesim_task_tests
 warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
+    collision_avoidance_test.cpp
     interpolation_test.cpp
     movement_test.cpp
     runner_test.cpp

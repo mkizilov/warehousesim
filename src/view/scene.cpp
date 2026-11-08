@@ -33,6 +33,7 @@ constexpr Color kGaugeBackground{20, 20, 24};
 constexpr Color kPanel{30, 33, 41};
 constexpr Color kPanelText{200, 205, 215};
 constexpr Color kPausedText{255, 120, 100};
+constexpr Color kHeldBack{255, 70, 70};
 
 ScreenRect inset(const ScreenRect& rect, double fraction) {
   const double margin = rect.width * fraction;
@@ -114,6 +115,68 @@ void addTaskMarkers(DrawList& list, const simulation::Snapshot& snapshot, const 
     }
     if (contains(range, task.dropoff)) {
       list.commands.emplace_back(FillRect{inset(camera.cellRect(task.dropoff), 0.4), kActiveTask});
+    }
+  }
+}
+
+void addOutline(DrawList& list, const ScreenRect& cell, Color color) {
+  const ScreenRect r = inset(cell, 0.06);
+  const ScreenPoint topLeft{r.x, r.y};
+  const ScreenPoint topRight{r.right(), r.y};
+  const ScreenPoint bottomRight{r.right(), r.bottom()};
+  const ScreenPoint bottomLeft{r.x, r.bottom()};
+  list.commands.emplace_back(Line{topLeft, topRight, color});
+  list.commands.emplace_back(Line{topRight, bottomRight, color});
+  list.commands.emplace_back(Line{bottomRight, bottomLeft, color});
+  list.commands.emplace_back(Line{bottomLeft, topLeft, color});
+}
+
+// The cells each robot holds (its own and those it has claimed ahead), outlined in its colour.
+void addOccupiedCells(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
+                      const CellRange& range) {
+  for (const simulation::RobotSnapshot& robot : snapshot.robots) {
+    const Color color = robotColor(robot.state, robot.goal);
+    for (const Point cell : robot.holds) {
+      if (contains(range, cell)) {
+        addOutline(list, camera.cellRect(cell), color);
+      }
+    }
+  }
+}
+
+// Each robot's remaining route as a line from where it is through the centre of every cell to the
+// goal, with a marker on the goal; and a cross on the cell a held-back robot may not enter yet.
+void addPaths(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
+              const CellRange& range) {
+  const auto centre = [&camera](Point cell) {
+    return camera.worldToScreen(
+        {static_cast<double>(cell.x) + 0.5, static_cast<double>(cell.y) + 0.5});
+  };
+  for (const simulation::RobotSnapshot& robot : snapshot.robots) {
+    if (robot.path.empty()) {
+      continue;
+    }
+    const Color color = robotColor(robot.state, robot.goal);
+    const core::Vec2 start = robot.center();
+    ScreenPoint from = camera.worldToScreen({start.x, start.y});
+    Point previous = robot.position;
+    for (const Point cell : robot.path) {
+      const ScreenPoint to = centre(cell);
+      if (contains(range, previous) || contains(range, cell)) {
+        list.commands.emplace_back(Line{from, to, color});
+      }
+      from = to;
+      previous = cell;
+    }
+    if (contains(range, robot.path.back())) {
+      list.commands.emplace_back(FillRect{inset(camera.cellRect(robot.path.back()), 0.4), color});
+    }
+  }
+  for (const simulation::RobotSnapshot& robot : snapshot.robots) {
+    if (robot.waiting && contains(range, robot.waiting->cell)) {
+      const ScreenRect r = inset(camera.cellRect(robot.waiting->cell), 0.2);
+      list.commands.emplace_back(Line{{r.x, r.y}, {r.right(), r.bottom()}, kHeldBack});
+      list.commands.emplace_back(Line{{r.right(), r.y}, {r.x, r.bottom()}, kHeldBack});
     }
   }
 }
@@ -334,7 +397,8 @@ std::array<std::string, 2> statusLines(const world::Warehouse& warehouse,
   }
 
   return {first.str(),
-          "Space pause  Wheel/+/- zoom  Drag/arrows/WASD pan  [ ] speed  0 fit view  Esc quit"};
+          "Space pause  Wheel/+/- zoom  Drag/arrows/WASD pan  [ ] speed  0 fit view  "
+          "P paths  O occupied  Esc quit"};
 }
 
 DrawList buildScene(const world::Warehouse& warehouse, const simulation::Snapshot& snapshot,
@@ -350,6 +414,12 @@ DrawList buildScene(const world::Warehouse& warehouse, const simulation::Snapsho
     addCells(list, warehouse, camera, range);
     addGridLines(list, camera, range);
     addTaskMarkers(list, snapshot, camera, range);
+    if (status.showOccupied) {
+      addOccupiedCells(list, snapshot, camera, range);
+    }
+    if (status.showPaths) {
+      addPaths(list, snapshot, camera, range);
+    }
     addRobots(list, snapshot, camera, range);
   }
   addRulers(list, camera, range);

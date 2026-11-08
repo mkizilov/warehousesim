@@ -30,6 +30,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `robots`     | robot entity: pose, motion model, battery, task, path, state machine | core                  |
 | `planning`   | `PathPlanner` interface, A* with options, results, reused workspace | core, world            |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
+| `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance) | core, world, robots |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `view`       | camera, scene (draw list), interpolation, input -> view logic; no SDL | core, world, simulation |
@@ -101,6 +102,20 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   simulation, view or SDL. Dispatcher changes need a matching update of the independent reference greedy in
   `tests/dispatcher_test.cpp`. Cancelling through `Simulation::cancelTask` must also stop the robot that
   holds the task.
+- Collision avoidance is two layers and the lower one is the authority. Robots never overlap or swap
+  because `Simulation` only lets a robot drive into cells it has claimed in `World` (one holder per cell);
+  `traffic` only decides, ahead of time, how many cells a robot may claim this step. Never let the table
+  grant a cell the world refuses, never make safety depend on it, and keep `reservations = false` working.
+  `traffic` depends on `core`, `world` and `robots` only (its tests build into `warehousesim_traffic_tests`),
+  and must stay deterministic: conflicts are reported earliest step first, then lowest robot id, and robots
+  plan in ascending id order (planning out of order throws). The table copies the walkable cells when it is
+  built, so a `Simulation` that ever gets a layout-editing API must rebuild it. `robots::forecastHolds()`
+  must keep using the robot's real motion code (`stepUnobstructed`), not an approximation of it. Anything
+  that moves a robot other than on its own turn (`stepAside`) must tell the controller (`relocate`) and
+  must use up that robot's step. Keep `CollisionAvoidancePropertyTest` and `TrafficAudit` (no overlap, no
+  swap, at most a cell of movement per tick) green on every layout, and the demo-hall standstill test: a
+  change to blocking or sidestepping rules is checked against many seeds, not one (the throughput of the
+  demo hall varies by about +-3 tasks per 500 ticks between seeds, so single-seed comparisons mislead).
 - Depend on interfaces at module seams (`PathPlanner`, `DistanceEstimator`, `Dispatcher`) and inject implementations through
   constructors. No global or singleton state.
 - Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them

@@ -108,7 +108,8 @@ int main(int argc, char** argv) {
       }
 
       const warehousesim::view::ViewStatus status{controller.paused(), controller.speed(),
-                                                  controller.pointer()};
+                                                  controller.pointer(), controller.showPaths(),
+                                                  controller.showOccupied()};
       // The simulation moves in whole steps; what is drawn is the point between the last two that
       // real time has reached, so motion is smooth at any frame rate.
       const warehousesim::simulation::FrameState frame = runner.frame();

@@ -17,6 +17,7 @@
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/simulation.hpp"
+#include "warehousesim/traffic/reservation_table.hpp"
 #include "warehousesim/view/camera.hpp"
 #include "warehousesim/view/draw_list.hpp"
 #include "warehousesim/world/layouts.hpp"
@@ -269,6 +270,155 @@ TEST(SceneTest, RobotsAreColouredSquaresInsideTheirCell) {
             warehousesim::view::robotColor(kToPickup.state, kToPickup.goal));
   EXPECT_TRUE(expected.x > camera.cellRect(P(1, 0)).x);
   EXPECT_TRUE(expected.right() < camera.cellRect(P(1, 0)).right());
+}
+
+// ---- route and occupied-cell overlays ---------------------------------------------------------
+
+// A robot at (0, 1) heading east along the bottom row, holding its own cell and the next one.
+Snapshot snapshotWithRoute() {
+  Snapshot snapshot = snapshotWithRobot(P(0, 1), kToDropoff);
+  snapshot.robots[0].path = {P(1, 1), P(2, 1)};
+  snapshot.robots[0].holds = {P(0, 1), P(1, 1)};
+  return snapshot;
+}
+
+std::vector<Line> linesOfColor(const DrawList& list, Color color) {
+  std::vector<Line> result;
+  for (const Line& line : lines(list)) {
+    if (line.color == color) {
+      result.push_back(line);
+    }
+  }
+  return result;
+}
+
+constexpr Color kHeldBackCross{255, 70, 70};
+
+TEST(SceneTest, OverlaysAreOffUnlessAskedFor) {
+  const Camera camera = smallCamera();
+  const Color robotColor = warehousesim::view::robotColor(kToDropoff.state, kToDropoff.goal);
+  const DrawList plain = sceneOf(smallWarehouse(), snapshotWithRoute(), camera);
+  EXPECT_TRUE(linesOfColor(plain, robotColor).empty());
+  EXPECT_FALSE(indexOfFill(plain, inset(camera.cellRect(P(2, 1)), 0.4)).has_value());
+}
+
+TEST(SceneTest, ThePlannedRouteIsALineThroughTheCellCentresWithAMarkerOnTheGoal) {
+  const Camera camera = smallCamera();
+  ViewStatus status;
+  status.showPaths = true;
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRoute(), camera, status);
+  const Color color = warehousesim::view::robotColor(kToDropoff.state, kToDropoff.goal);
+  const auto segments = linesOfColor(list, color);
+  ASSERT_EQ(segments.size(), 2U);
+  const auto centre = [&](Point cell) {
+    return camera.worldToScreen({cell.x + 0.5, cell.y + 0.5});
+  };
+  EXPECT_NEAR(segments[0].from.x, centre(P(0, 1)).x, kEps);  // it starts where the robot is
+  EXPECT_NEAR(segments[0].from.y, centre(P(0, 1)).y, kEps);
+  EXPECT_NEAR(segments[0].to.x, centre(P(1, 1)).x, kEps);
+  EXPECT_NEAR(segments[1].from.x, centre(P(1, 1)).x, kEps);  // and the next begins where it ended
+  EXPECT_NEAR(segments[1].to.x, centre(P(2, 1)).x, kEps);
+  EXPECT_NEAR(segments[1].to.y, centre(P(2, 1)).y, kEps);
+  const auto marker = indexOfFill(list, inset(camera.cellRect(P(2, 1)), 0.4));
+  ASSERT_TRUE(marker.has_value());
+  EXPECT_EQ(std::get<FillRect>(list.commands[*marker]).color, color);
+}
+
+TEST(SceneTest, TheRouteStartsAtTheRobotsPoseNotJustItsCell) {
+  const Camera camera = smallCamera();
+  Snapshot snapshot = snapshotWithRoute();
+  snapshot.robots[0].pose = RobotPose{{0.9, 1.5}, 0.0};  // part-way to the next cell
+  ViewStatus status;
+  status.showPaths = true;
+  const auto segments =
+      linesOfColor(sceneOf(smallWarehouse(), snapshot, camera, status),
+                   warehousesim::view::robotColor(kToDropoff.state, kToDropoff.goal));
+  ASSERT_FALSE(segments.empty());
+  EXPECT_NEAR(segments[0].from.x, camera.worldToScreen({0.9, 1.5}).x, kEps);
+}
+
+TEST(SceneTest, CellsRobotsHoldAreOutlinedInTheirColour) {
+  const Camera camera = smallCamera();
+  ViewStatus status;
+  status.showOccupied = true;
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRoute(), camera, status);
+  const Color color = warehousesim::view::robotColor(kToDropoff.state, kToDropoff.goal);
+  EXPECT_EQ(linesOfColor(list, color).size(), 8U);  // four sides of each of the two held cells
+  const ScreenRect held = inset(camera.cellRect(P(1, 1)), 0.06);
+  bool top = false;
+  for (const Line& line : linesOfColor(list, color)) {
+    top = top ||
+          (std::fabs(line.from.y - held.y) < kEps && std::fabs(line.to.y - held.y) < kEps &&
+           std::fabs(line.from.x - held.x) < kEps && std::fabs(line.to.x - held.right()) < kEps);
+  }
+  EXPECT_TRUE(top);
+}
+
+TEST(SceneTest, OverlaysAreDrawnBelowTheRobots) {
+  const Camera camera = smallCamera();
+  ViewStatus status;
+  status.showPaths = true;
+  status.showOccupied = true;
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRoute(), camera, status);
+  const auto body = indexOfFill(list, inset(camera.cellRect(P(0, 1)), 0.15));
+  ASSERT_TRUE(body.has_value());
+  const Color color = warehousesim::view::robotColor(kToDropoff.state, kToDropoff.goal);
+  for (std::size_t i = 0; i < list.commands.size(); ++i) {
+    if (const auto* line = std::get_if<Line>(&list.commands[i]); line && line->color == color) {
+      EXPECT_LT(i, *body);
+    }
+  }
+}
+
+TEST(SceneTest, AHeldBackRobotGetsACrossOnTheCellItMayNotEnter) {
+  const Camera camera = smallCamera();
+  Snapshot snapshot = snapshotWithRoute();
+  snapshot.robots[0].waiting = warehousesim::simulation::RobotWait{
+      P(1, 1), warehousesim::traffic::ConflictKind::Vertex, warehousesim::core::RobotId{3}};
+  const ScreenRect cell = inset(camera.cellRect(P(1, 1)), 0.2);
+
+  const DrawList without = sceneOf(smallWarehouse(), snapshot, camera);
+  EXPECT_TRUE(linesOfColor(without, kHeldBackCross).empty());
+
+  ViewStatus status;
+  status.showPaths = true;
+  const auto cross =
+      linesOfColor(sceneOf(smallWarehouse(), snapshot, camera, status), kHeldBackCross);
+  ASSERT_EQ(cross.size(), 2U);
+  EXPECT_NEAR(cross[0].from.x, cell.x, kEps);
+  EXPECT_NEAR(cross[0].to.x, cell.right(), kEps);
+  EXPECT_NEAR(cross[1].from.x, cell.right(), kEps);
+  EXPECT_NEAR(cross[1].to.x, cell.x, kEps);
+
+  snapshot.robots[0].waiting.reset();
+  EXPECT_TRUE(
+      linesOfColor(sceneOf(smallWarehouse(), snapshot, camera, status), kHeldBackCross).empty());
+}
+
+TEST(SceneTest, OverlaysOutsideTheWindowAreSkipped) {
+  Camera camera(ScreenSize{100, 100}, warehousesim::world::GridSize(3, 2));
+  camera.setZoom(40.0);
+  camera.centerOn({0.5, 0.5});
+  Snapshot snapshot = snapshotWithRoute();
+  snapshot.robots[0].position = P(2, 1);
+  snapshot.robots[0].path = {P(2, 1)};
+  snapshot.robots[0].holds = {P(2, 1)};
+  snapshot.robots[0].waiting = warehousesim::simulation::RobotWait{
+      P(2, 1), warehousesim::traffic::ConflictKind::Swap, std::nullopt};
+  ViewStatus status;
+  status.showPaths = true;
+  status.showOccupied = true;
+  const DrawList list = sceneOf(smallWarehouse(), snapshot, camera, status);
+  EXPECT_TRUE(linesOfColor(list, kHeldBackCross).empty());
+  EXPECT_TRUE(linesOfColor(list, warehousesim::view::robotColor(kToDropoff.state, kToDropoff.goal))
+                  .empty());
+}
+
+TEST(SceneTest, TheKeyHelpMentionsTheOverlayKeys) {
+  const std::string help =
+      warehousesim::view::statusLines(smallWarehouse(), Snapshot{}, smallCamera(), ViewStatus{})[1];
+  EXPECT_TRUE(help.find("P paths") != std::string::npos);
+  EXPECT_TRUE(help.find("O occupied") != std::string::npos);
 }
 
 TEST(SceneTest, EveryRobotStateAndGoalHasItsOwnColour) {

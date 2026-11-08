@@ -14,6 +14,8 @@ struct InputEvents {
   bool quit = false;
   bool togglePause = false;
   bool resetView = false;                 // fit the whole warehouse
+  bool togglePaths = false;               // show or hide the planned routes
+  bool toggleOccupied = false;            // show or hide the cells robots hold
   int speedSteps = 0;                     // playback speed doublings (+) or halvings (-)
   double zoomSteps = 0.0;                 // wheel notches / zoom key presses; positive zooms in
   std::optional<ScreenPoint> zoomAnchor;  // where to zoom about; the window centre if unset
@@ -25,7 +27,8 @@ struct InputEvents {
   bool pointerLeft = false;            // the pointer left the window
 };
 
-// Owns the camera plus the pause and playback-speed state that the UI controls.
+// Owns the camera plus the pause, playback-speed and overlay state that the UI controls. Both
+// overlays start on.
 class ViewController {
  public:
   static constexpr double kKeyPanPixelsPerSecond = 600.0;
@@ -42,11 +45,15 @@ class ViewController {
   [[nodiscard]] const Camera& camera() const noexcept { return camera_; }
   [[nodiscard]] bool paused() const noexcept { return paused_; }
   [[nodiscard]] double speed() const noexcept { return speed_; }
+  [[nodiscard]] bool showPaths() const noexcept { return showPaths_; }
+  [[nodiscard]] bool showOccupied() const noexcept { return showOccupied_; }
   [[nodiscard]] std::optional<ScreenPoint> pointer() const noexcept { return pointer_; }
 
  private:
   Camera camera_;
   bool paused_ = false;
+  bool showPaths_ = true;
+  bool showOccupied_ = true;
   double speed_;
   std::optional<ScreenPoint> pointer_;
 };

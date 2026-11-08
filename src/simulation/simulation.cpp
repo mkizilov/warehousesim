@@ -27,6 +27,7 @@ Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& rob
                        std::unique_ptr<tasks::Dispatcher> dispatcher)
     : world_(std::move(warehouse)),
       chargers_(world_.layout().cellsOfType(world::CellType::Charging)),
+      traffic_(world_.layout(), config.reservationHorizon),
       planner_(planner ? std::move(planner) : std::make_unique<planning::AStarPlanner>()),
       dispatcher_(dispatcher ? std::move(dispatcher) : std::make_unique<tasks::GreedyDispatcher>()),
       config_(config) {
@@ -46,6 +47,8 @@ Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& rob
     }
     robots_.emplace_back(id, start, spec);
   }
+  plans_.resize(robots_.size());
+  displaced_.assign(robots_.size(), false);
 
   if (config_.taskSpawnInterval > 0) {
     // Explicit Pickup cells win; layouts without any fall back to the aisles beside shelves.
@@ -129,16 +132,24 @@ void Simulation::run(core::Tick ticks) {
   }
 }
 
+const traffic::TrafficPlan& Simulation::trafficPlan(core::RobotId id) const {
+  if (!id.valid() || id.value > plans_.size()) {
+    throw std::out_of_range("unknown robot id");
+  }
+  return plans_[id.value - 1];
+}
+
 Snapshot Simulation::snapshot() const {
   Snapshot result;
   result.tick = clock_.tick();
   result.robots.reserve(robots_.size());
   for (const Robot& robot : robots_) {
-    result.robots.push_back({robot.id(), robot.position(),
-                             RobotPose{robot.pose(), robot.headingAngle()}, robot.heading(),
-                             robot.state(), robot.goal(), robot.speed(), robot.battery().level(),
-                             robot.battery().capacity(), robot.task(), robot.motion(),
-                             robot.carriesCargo(), robot.deliveries()});
+    result.robots.push_back(
+        {robot.id(), robot.position(), RobotPose{robot.pose(), robot.headingAngle()},
+         robot.heading(), robot.state(), robot.goal(), robot.speed(), robot.battery().level(),
+         robot.battery().capacity(), robot.task(),
+         std::vector<Point>(robot.path().begin(), robot.path().end()), world_.holdsOf(robot.id()),
+         waitOf(robot), robot.motion(), robot.carriesCargo(), robot.deliveries()});
   }
   for (const tasks::Task& task : tasks_.all()) {
     if (task.isOpen()) {
@@ -148,6 +159,8 @@ Snapshot Simulation::snapshot() const {
   result.completedTasks = tasks_.count(tasks::TaskStatus::Completed);
   result.failedTasks = tasks_.count(tasks::TaskStatus::Failed);
   result.cancelledTasks = tasks_.count(tasks::TaskStatus::Cancelled);
+  result.traffic = traffic_.stats();
+  result.replans = replans_;
   return result;
 }
 
@@ -187,8 +200,29 @@ void Simulation::assignTasks() {
   }
 }
 
-// Robots act in id order; a cell vacated earlier in the tick is available to later robots.
+// A robot that stood still this step because the next cell was not its to have: the reservation
+// table kept it back, or another robot holds the cell.
+std::optional<RobotWait> Simulation::waitOf(const Robot& robot) const {
+  const std::optional<Point> next = robot.nextStep();
+  if (robot.state() != RobotState::Navigating || robot.blockedTicks() == 0 || !next) {
+    return std::nullopt;
+  }
+  const Point cell = *next;
+  const traffic::TrafficPlan& plan = plans_[robot.id().value - 1];
+  if (plan.waiting() && !plan.inTheWay) {
+    return RobotWait{cell, plan.conflict->kind, plan.conflict->other};
+  }
+  return RobotWait{cell, traffic::ConflictKind::Vertex, world_.occupantAt(cell)};
+}
+
+// Robots act in id order; a cell vacated earlier in the tick is available to later robots. When
+// reservations are on, the table is built first from where every robot is right now, and each robot
+// reserves its route in the same id order just before it moves (see TrafficController).
 void Simulation::updateRobots() {
+  if (config_.reservations) {
+    traffic_.beginStep(clock_.tick(), robots_);
+  }
+  std::fill(displaced_.begin(), displaced_.end(), false);
   for (Robot& robot : robots_) {
     updateRobot(robot);
   }
@@ -200,8 +234,14 @@ void Simulation::updateRobot(Robot& robot) {
   settle(robot);
   breakDownIfDepleted(robot);
   robot.elapseTick();
-  if (robot.hasPath()) {
-    moveAlongPath(robot);
+  traffic::TrafficPlan& plan = plans_[robot.id().value - 1];
+  plan = {};
+  if (config_.reservations) {
+    plan = traffic_.plan(robot);
+  }
+  // A robot that was moved aside this step has used up its step: a sidestep is a whole cell.
+  if (robot.hasPath() && !displaced_[robot.id().value - 1]) {
+    moveAlongPath(robot, plan);
   }
 }
 
@@ -322,7 +362,12 @@ void Simulation::breakDownIfDepleted(Robot& robot) {
 // One fixed step of one robot's motion. The world only ever sees whole cells: the robot first
 // claims the cells it needs ahead of it, drives within them, and the world is told about each
 // cell the robot passes. Where the robot really is between two cells is its own business.
-void Simulation::moveAlongPath(Robot& robot) {
+void Simulation::moveAlongPath(Robot& robot, const traffic::TrafficPlan& plan) {
+  // The table may hold the robot back before a cell it would otherwise take. `cleared` is how many
+  // cells of the remaining path it lets the robot have. A robot that is in the way of one with
+  // priority, or already braking, is not held back: only the world's own claims apply to it.
+  const bool held = plan.waiting() && !plan.inTheWay && robot.state() == RobotState::Navigating;
+  std::size_t cleared = held ? plan.clearedCells : robot.path().size();
   double timeLeft = kStepLength;
   // A robot can come to rest at a corner and still have time in the step; it uses it to turn and
   // set off again, as a shorter step would have. A couple of rounds is all a step can hold.
@@ -335,18 +380,29 @@ void Simulation::moveAlongPath(Robot& robot) {
         (void)robot.advance(0.0);
         return;
       }
-      claimAhead(robot, timeLeft);
+      claimAhead(robot, timeLeft, cleared);
       if (robot.authority() == 0) {
         // Not even the next cell is available.
         bool freed = false;
         if (round == 0) {
           robot.noteBlocked();
-          // When the blocker steps aside the cell is free right now. Take it immediately,
-          // otherwise the blocker would step straight back in on its own turn.
-          if (robot.blockedTicks() >= config_.maxBlockedTicks &&
-              resolveBlock(robot, *robot.nextStep())) {
-            claimAhead(robot, timeLeft);
-            freed = robot.authority() > 0;
+          if (robot.blockedTicks() >= config_.maxBlockedTicks) {
+            const Point next = *robot.nextStep();
+            if (held && cleared == 0 && !world_.isOccupied(next)) {
+              // The cell is free; only a reservation says it is not yet this robot's. Wait for
+              // it, or ask for a way round. A new route is not driven until it has been checked
+              // against the table, which happens on the next step.
+              if (requestReplan(robot, plan)) {
+                (void)robot.advance(0.0);
+                return;
+              }
+            } else if (resolveBlock(robot, next)) {
+              // When the blocker steps aside the cell is free right now. Take it immediately,
+              // otherwise the blocker would step straight back in on its own turn.
+              cleared = robot.path().size();  // the table still has the blocker where it was
+              claimAhead(robot, timeLeft, cleared);
+              freed = robot.authority() > 0;
+            }
           }
         }
         if (!freed) {
@@ -356,6 +412,7 @@ void Simulation::moveAlongPath(Robot& robot) {
       }
     }
     const std::uint32_t passed = robot.advance(timeLeft);
+    cleared = passed >= cleared ? 0 : cleared - passed;
     for (std::uint32_t i = 0; i < passed; ++i) {
       if (!world_.advanceRobot(robot.id())) {
         throw std::logic_error("the world and a robot disagree about the cells it holds");
@@ -368,8 +425,8 @@ void Simulation::moveAlongPath(Robot& robot) {
   }
 }
 
-void Simulation::claimAhead(Robot& robot, double timeToDrive) {
-  const std::size_t wanted = robot.wantedAuthority(timeToDrive);
+void Simulation::claimAhead(Robot& robot, double timeToDrive, std::size_t cleared) {
+  const std::size_t wanted = std::min(robot.wantedAuthority(timeToDrive), cleared);
   while (robot.authority() < wanted) {
     const Point cell = robot.path()[robot.authority()];
     const world::MoveStatus status = world_.claimCell(robot.id(), cell);
@@ -411,9 +468,15 @@ bool Simulation::resolveBlock(Robot& robot, Point cell) {
   }
   if (!tryRepath(robot, occupiedCells())) {
     // A charger taken by a robot that is charging will not be free for a while: pick another.
-    if (robot.goal() != NavigationGoal::Charger || !retargetCharger(robot)) {
-      robot.clearBlocked();  // wait a few more ticks before trying again
+    if (robot.goal() == NavigationGoal::Charger && retargetCharger(robot)) {
+      return false;
     }
+    // Face to face with a robot that has nowhere to go: each needs the other's cell, so unless this
+    // one gives way they wait for each other for ever.
+    if (blocker.nextStep() == robot.position() && stepAside(robot)) {
+      return false;
+    }
+    robot.clearBlocked();  // wait a few more ticks before trying again
   }
   return false;
 }
@@ -427,9 +490,13 @@ bool Simulation::stepAside(Robot& robot) {
     throw std::logic_error("world rejected a robot sidestep");
   }
   robot.sidestep(options.front());
+  displaced_[robot.id().value - 1] = true;
   if (robot.state() == RobotState::Navigating && !tryRepath(robot, occupiedCells()) &&
       !tryRepath(robot, {})) {
     abortNavigation(robot);
+  }
+  if (config_.reservations) {
+    traffic_.relocate(robot);
   }
   return true;
 }
@@ -439,12 +506,27 @@ planning::BlockedSet Simulation::occupiedCells() const {
   return {cells.begin(), cells.end()};
 }
 
-bool Simulation::tryRepath(Robot& robot, const planning::BlockedSet& blocked) {
+bool Simulation::tryRepath(Robot& robot, const planning::BlockedSet& blocked,
+                           std::optional<std::size_t> maxExtraCells) {
   auto path = planner_->findPath(world_.layout(), robot.position(), *robot.destination(), blocked);
-  if (!path) {
+  if (!path || (maxExtraCells && path->size() > robot.path().size() + *maxExtraCells)) {
     return false;
   }
   robot.setPath(std::move(*path));
+  return true;
+}
+
+// A robot held back by the table for as long as it takes to be blocked tries to go round the cell
+// it may not enter, treating it and every occupied cell as walls. A detour much longer than the
+// route it replaces is not worth it: the robot keeps waiting and tries again later.
+bool Simulation::requestReplan(Robot& robot, const traffic::TrafficPlan& plan) {
+  planning::BlockedSet blocked = occupiedCells();
+  blocked.insert(plan.conflict->cell);
+  robot.clearBlocked();
+  if (!tryRepath(robot, blocked, config_.maxDetourCells)) {
+    return false;
+  }
+  ++replans_;
   return true;
 }
 

@@ -149,6 +149,10 @@ InputEvents SdlWindow::pollEvents() {
           result.togglePause = !result.togglePause;
         } else if (key == SDLK_0 || key == SDLK_KP_0) {
           result.resetView = true;
+        } else if (key == SDLK_P) {
+          result.togglePaths = !result.togglePaths;
+        } else if (key == SDLK_O) {
+          result.toggleOccupied = !result.toggleOccupied;
         } else if (key == SDLK_LEFTBRACKET) {
           --result.speedSteps;
         } else if (key == SDLK_RIGHTBRACKET) {

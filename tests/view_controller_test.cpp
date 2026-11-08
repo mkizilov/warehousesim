@@ -65,6 +65,32 @@ TEST(ViewControllerTest, TogglePauseFlipsTheStateEachTime) {
   EXPECT_FALSE(view.paused());
 }
 
+TEST(ViewControllerTest, BothOverlaysStartOnAndEachToggleFlipsOnlyItsOwn) {
+  ViewController view = bigView();
+  EXPECT_TRUE(view.showPaths());
+  EXPECT_TRUE(view.showOccupied());
+
+  InputEvents paths;
+  paths.togglePaths = true;
+  view.apply(paths, 0.016);
+  EXPECT_FALSE(view.showPaths());
+  EXPECT_TRUE(view.showOccupied());
+
+  InputEvents occupied;
+  occupied.toggleOccupied = true;
+  view.apply(occupied, 0.016);
+  EXPECT_FALSE(view.showPaths());
+  EXPECT_FALSE(view.showOccupied());
+
+  view.apply(InputEvents{}, 0.016);  // no event, no change
+  EXPECT_FALSE(view.showPaths());
+  view.apply(paths, 0.016);
+  view.apply(occupied, 0.016);
+  EXPECT_TRUE(view.showPaths());
+  EXPECT_TRUE(view.showOccupied());
+  EXPECT_FALSE(view.paused());  // nothing else moved
+}
+
 TEST(ViewControllerTest, SpeedDoublesAndHalvesPerStep) {
   ViewController view = bigView();
   InputEvents faster;

@@ -534,6 +534,18 @@ void Robot::setPath(RobotPath path) {
   blockedTicks_ = 0;
 }
 
+Robot Robot::withRouteCutTo(std::size_t pathCells) const {
+  Robot copy = *this;
+  const std::size_t keep = std::max(pathCells, authority_);
+  if (keep < copy.path_.size()) {
+    copy.path_.resize(keep);
+    if (copy.destination_) {
+      copy.destination_ = keep == 0 ? copy.position_ : copy.path_.back();
+    }
+  }
+  return copy;
+}
+
 void Robot::windDown() {
   const bool moving = authority_ > 0 && (speed_ > kEpsilon || progress_ > kEpsilon);
   if (!moving) {

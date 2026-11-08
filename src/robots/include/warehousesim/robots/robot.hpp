@@ -195,6 +195,12 @@ class Robot {
   // Replaces the remaining path while Navigating; it must end at the destination and keep the
   // cells the robot has already been granted.
   void setPath(RobotPath path);
+  // A copy of this robot whose route ends after `pathCells` cells: the rest of the path is
+  // dropped and the last cell kept becomes the destination. For asking what the robot would do if
+  // it had to stop there (see forecastHolds). Never cuts below the cells the robot already holds,
+  // so the copy is always consistent.
+  [[nodiscard]] Robot withRouteCutTo(std::size_t pathCells) const;
+
   // Forced one-cell move to an adjacent cell to make room for another robot. Only a robot that
   // is at rest with no authority and not in a stationary state can be moved. The old path is
   // dropped; a navigating robot must be given a new one.

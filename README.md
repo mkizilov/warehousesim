@@ -5,7 +5,8 @@ headless library and CLI plus a separate SDL3 visualisation.
 
 ```
 core ← world ← planning ┐
-core ← robots ──────────┴← tasks ← simulation ← view (no SDL) ← rendering (SDL3) ← apps/gui
+core ← robots ──────────┴← tasks ┐
+        world, robots ← traffic ─┴← simulation ← view (no SDL) ← rendering (SDL3) ← apps/gui
                                        ↑
                                   apps/cli (headless)
 ```
@@ -14,7 +15,8 @@ core ← robots ──────────┴← tasks ← simulation ← vi
 |--------------|---------------------------------------------------------------------------|
 | `core`       | `Point`, strong ids, `SimClock`/`Tick`, seedable `Rng` (SplitMix64)       |
 | `world`      | grid model, occupancy, predefined layouts (see below); no SDL or JSON     |
-| `robots`     | `Robot` entity: pose, speed, battery, task, path and an explicit state machine |
+| `robots`     | `Robot` entity: pose, speed, battery, task, path and an explicit state machine; `forecastHolds()` |
+| `traffic`    | space-time `ReservationTable` and the `TrafficController` that fills it (see Collision avoidance) |
 | `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
@@ -76,6 +78,7 @@ default 60), `--frames N` (exit after N frames; 0 = until closed).
 | mouse wheel, `+` / `-` | zoom about the pointer / window centre |
 | drag with any mouse button, arrow keys, WASD | pan |
 | `0` | fit the whole warehouse |
+| `P` / `O` | show / hide the planned routes (and a red cross on the cell a held-back robot may not enter) / the cells robots hold |
 | Esc, closing the window, Ctrl-C | quit (the worker thread is joined and SDL shut down) |
 
 ## Path planning
@@ -313,8 +316,67 @@ charging) and advances along its path. Rules worth knowing:
   loading and unloading everywhere, and an energy model (and recharging) on the layouts that have chargers.
 
 Robots are shown by the visualisation but contain no drawing code: the view reads
-`simulation::RobotSnapshot` (state, goal, heading, pose, speed, motion, battery, task, cargo).
+`simulation::RobotSnapshot` (state, goal, heading, pose, speed, motion, battery, task, cargo, route, held
+cells and what it is waiting for).
 
+## Collision avoidance
+
+Two layers keep robots apart. The lower one is physical and always on: a robot only drives into cells it
+has claimed in `World`, which refuses a cell somebody holds, so robots can never overlap or swap cells
+(every test that runs traffic audits that on every tick). The upper one, new in this stage, looks ahead so
+that robots mostly never get that far.
+
+- **`traffic::ReservationTable`** holds space-time reservations: `Occupy{cell, steps}` (a robot is on a
+  cell for a range of simulation steps) and `Traverse{from, to, step}` (it moves along an edge). Asking
+  whether a request fits returns the clash, if any: `Blocked` (a wall or outside the grid), `Vertex` (two
+  robots on one cell in the same step) or `Swap` (two robots exchanging cells along an edge). The answer is
+  independent of storage order: earliest step first, then the lowest robot id, so everything built on it
+  is reproducible. A robot's own reservations never clash with each other.
+- **`robots::forecastHolds()`** runs the robot's own motion code (turning, braking distance, the cells it
+  has to hold ahead of itself) on a copy of the robot, as if nothing were in the way, to say which cells it
+  will hold at each of the next steps. The table therefore reserves what the robot will really do, not an
+  approximation of it.
+- **`traffic::TrafficController`** rebuilds the table every step. `beginStep()` reserves what is already a
+  fact: every robot's cell and the cells it holds, and robots with nowhere to go for the whole horizon.
+  Then robots plan in ascending id order (priority is the id, as in the rest of the engine; planning out
+  of order throws). A robot whose forecast fits is reserved as it is. One whose forecast clashes with a
+  reservation made earlier is cut back to the cells before the first clash and reserves the cell it will
+  wait on instead. It prefers a waiting cell that no robot with priority has on its route at all, however
+  far ahead, so a robot waits outside a corridor rather than in it. If there is no such cell (it is
+  already on the other's route) the plan says `inTheWay` and the robot is left to the physical layer.
+  The default horizon is 12 steps; looking 48 ahead held robots back for clashes that never came.
+- **In `Simulation`,** the plan limits how many cells a robot may claim this step. A held-back robot
+  waits; if it has waited `maxBlockedTicks` and the cell is still free it asks the planner for a way round
+  (the conflicting cell and every occupied cell count as walls) and takes it only if it is at most
+  `maxDetourCells` (4) longer, since vehicles that stop at every corner lose more on a detour than on a
+  short wait. If the cell is already occupied the older rules apply: the blocker steps aside if it can
+  (idle or lower priority), otherwise the robot routes around it, and two robots face to face with a
+  blocker that cannot move are sorted out by the one with a free neighbour stepping aside. A robot moved
+  aside has used its step, so no robot ever moves more than a cell per tick.
+- **Switching it off:** `SimulationConfig::reservations = false` leaves only the physical layer (and the
+  deadlock-breaking rules above); the tests use it to show that robots still never collide but meet
+  head-on.
+- **What you can see:** the GUI draws each robot's planned route and held cells (`P` and `O` toggle them) and
+  a red cross on the cell a held-back robot may not enter. The JSON has `path`, `holds` and `waiting` (cell,
+  kind of clash, the robot in the way) per robot and a top-level `traffic` object with `replans` and the
+  clashes planning has found, counted once per robot per step in which it was held back.
+
+What it buys, honestly: on the bundled layouts the table does not change throughput measurably. Over 30
+seeds and 3000 ticks, with the reservations on or off, tasks completed per 500 ticks (after the first
+1000 ticks) were 33.0 vs 32.6
+(`demo`), 15.9 vs 15.7 (`compact`) and 24.7 vs 24.4 (`fulfilment`), with no failed tasks either way; the
+slowest 500-tick window was 28 vs 26, 13 vs 13 and 20 vs 20. Those differences are inside the seed-to-seed
+spread (about +-3 per window on `demo`). What it does is make robots hold back *before* a clash instead of
+meeting face to face: in `CollisionAvoidanceTest` two robots from opposite rooms of a one-cell corridor
+never meet inside it (the lower-priority one waits in its room), whereas with `reservations = false` they
+do. The scenario tests cover crossing paths, opposing corridor traffic, intersections of one-cell roads and
+simultaneous arrivals, with an audit on every tick that no two robots overlap or swap cells.
+
+Limits: the table looks 12 steps ahead, so a robot that has already entered a corridor when a robot with
+priority is still far down it cannot wait outside, and falls back on the physical rules (one of them is
+moved aside if it can be). Priority is the robot id, so a low-priority robot can be held back for a long
+time by a busy high-priority one. Three or more robots locked in a one-cell corridor with no free
+neighbour between them can still deadlock.
 ## Visualisation
 
 The window shows the grid with walls, shelves, pickup `P`, dropoff `D` and charging `C` cells (letters
@@ -322,6 +384,10 @@ appear when zoomed in), task markers, robot placeholders (a coloured square per 
 heading to a pickup, red heading to a dropoff, lime heading to a charger, amber loading, magenta unloading,
 green charging, grey unavailable; a nub on the side it faces, a box on top while it carries cargo, and the id and a battery gauge when zoomed in), column/row indices along the top and left edges,
 and a status bar with the tick, playback speed, zoom, task counts and the cell under the pointer.
+Two overlays, both on at start and toggled with `P` and `O`, show each robot's planned route (a line in the
+robot's colour through the cell centres to a marker on its goal, plus a red cross on the cell a held-back
+robot may not enter) and the cells robots hold (an outline in the robot's colour, which includes the
+cells a moving vehicle has claimed ahead of itself).
 
 - **Fixed timestep.** The simulation runs on a worker thread; `core::FixedTimestep` turns elapsed real time
   into whole simulation steps of constant size, so frame rate, window resizing and a slow renderer never
@@ -353,12 +419,18 @@ the status bar.
   layout has any, otherwise from an aisle cell beside a shelf, to a random `Dropoff`.
 - The bundled robots drive like vehicles: top speed 1 cell per tick, acceleration 0.5, deceleration 1 and a
   quarter turn per tick, stopping at every corner. That costs throughput against the idealised robot: in
-  3000 ticks they complete 179 to 205 tasks on `demo`, 92 to 98 on `compact` and 145 to 154 on `fulfilment`
-  (seeds 1 to 3), against 315 to 343, 159 to 160 and 227 to 239 with idealised robots.
+  3000 ticks they complete 188 to 197 tasks on `demo`, 91 to 100 on `compact` and 148 to 157 on `fulfilment`
+  (seeds 1 to 3), against 315 to 343, 159 to 160 and 227 to 239 with idealised robots (measured before
+  collision avoidance).
 - Robots act in id order each tick (see Robots above). A robot blocked for 3 ticks makes an idle or lower-priority (higher id)
-  blocker step aside, or routes around a higher-priority one. Dropoffs are single cells reachable from
-  one side in the demo layout, so heavy demand queues up; nothing deadlocks (see `DemoScenarioNeverDeadlocks`).
+  blocker step aside, or routes around a higher-priority one, or, face to face with a blocker that cannot
+  move, steps aside itself. Dropoffs are single cells at the edge of the demo layout, so heavy demand queues
+  up there; no seed of the demo hall comes to a standstill (`DemoScenarioNeverDeadlocks` for seeds 1 to 6,
+  `NoSeedOfTheDemoHallEverComesToAStandstill` for 1 to 30; before the face-to-face rule and the immediate
+  claim of a cell a blocker has just left, seeds such as 9 with the reservations off and 28 with them on
+  locked up for good).
 - Same seed ⇒ same run, bit for bit (`SameSeedIsDeterministic`, and the CLI output hashes match).
-- Layouts in 1-wide corridors can still deadlock if two robots need each other's cell with no free neighbour.
+- Layouts in 1-wide corridors can still deadlock if robots need each other's cells and none has a free
+  neighbour to step to.
 
 Project rules for contributors and agents are in [AGENTS.md](AGENTS.md).

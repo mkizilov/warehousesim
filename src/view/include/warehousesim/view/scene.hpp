@@ -17,6 +17,10 @@ struct ViewStatus {
   bool paused = false;
   double speed = 1.0;
   std::optional<ScreenPoint> pointer;  // pointer position, if it is inside the window
+  // Overlays: each robot's planned route (and a cross on the cell it is held back from), and the
+  // cells robots hold, outlined in the robot's colour.
+  bool showPaths = false;
+  bool showOccupied = false;
 };
 
 // Thickness of the coordinate rulers along the top and left edges and of the status bar at the
@@ -48,8 +52,9 @@ inline constexpr double kMinZoomForRobotIds = 20.0;
                                                      const ViewStatus& status);
 
 // Everything visible in one frame, back to front: the grid (walls, shelves, pickup, dropoff
-// and charging cells, grid lines), task markers, robot placeholders, coordinate rulers and the
-// status bar. Only cells inside the window are emitted.
+// and charging cells, grid lines), task markers, the route and occupied-cell overlays if they are
+// on, robot placeholders, coordinate rulers and the status bar. Only cells inside the window are
+// emitted.
 [[nodiscard]] DrawList buildScene(const world::Warehouse& warehouse,
                                   const simulation::Snapshot& snapshot, const Camera& camera,
                                   const ViewStatus& status);

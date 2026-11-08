@@ -21,6 +21,12 @@ void ViewController::apply(const InputEvents& input, double frameSeconds) {
   if (input.togglePause) {
     paused_ = !paused_;
   }
+  if (input.togglePaths) {
+    showPaths_ = !showPaths_;
+  }
+  if (input.toggleOccupied) {
+    showOccupied_ = !showOccupied_;
+  }
   if (input.speedSteps != 0) {
     speed_ = core::FixedTimestep::clampSpeed(speed_ * std::pow(2.0, input.speedSteps));
   }

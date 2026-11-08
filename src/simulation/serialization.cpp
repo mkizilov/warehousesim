@@ -1,6 +1,7 @@
 #include "warehousesim/simulation/serialization.hpp"
 
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -14,6 +15,23 @@ using nlohmann::json;
 json pointToJson(core::Point p) { return json{{"x", p.x}, {"y", p.y}}; }
 
 json optionalIdToJson(const auto& id) { return id ? json(id->value) : json(nullptr); }
+
+json pointsToJson(const std::vector<core::Point>& points) {
+  json result = json::array();
+  for (const core::Point p : points) {
+    result.push_back(pointToJson(p));
+  }
+  return result;
+}
+
+json waitToJson(const std::optional<RobotWait>& wait) {
+  if (!wait) {
+    return nullptr;
+  }
+  return json{{"cell", pointToJson(wait->cell)},
+              {"kind", traffic::toString(wait->kind)},
+              {"other", optionalIdToJson(wait->other)}};
+}
 
 }  // namespace
 
@@ -39,7 +57,10 @@ json toJson(const Snapshot& snapshot) {
          {"carrying", robot.carrying},
          {"deliveries", robot.deliveries},
          {"battery", {{"level", robot.batteryLevel}, {"capacity", robot.batteryCapacity}}},
-         {"task", optionalIdToJson(robot.task)}});
+         {"task", optionalIdToJson(robot.task)},
+         {"path", pointsToJson(robot.path)},
+         {"holds", pointsToJson(robot.holds)},
+         {"waiting", waitToJson(robot.waiting)}});
   }
   json tasksJson = json::array();
   for (const tasks::Task& task : snapshot.activeTasks) {
@@ -56,7 +77,13 @@ json toJson(const Snapshot& snapshot) {
               {"activeTasks", std::move(tasksJson)},
               {"completedTasks", snapshot.completedTasks},
               {"failedTasks", snapshot.failedTasks},
-              {"cancelledTasks", snapshot.cancelledTasks}};
+              {"cancelledTasks", snapshot.cancelledTasks},
+              {"traffic",
+               {{"blocked", snapshot.traffic.blocked},
+                {"vertexConflicts", snapshot.traffic.vertex},
+                {"swapConflicts", snapshot.traffic.swaps},
+                {"inTheWay", snapshot.traffic.inTheWay},
+                {"replans", snapshot.replans}}}};
 }
 
 world::Warehouse warehouseFromJson(const json& document) {
