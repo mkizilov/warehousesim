@@ -5,6 +5,7 @@
 #include <string>
 
 #include "warehousesim/core/ids.hpp"
+#include "warehousesim/metrics/fleet_metrics.hpp"
 #include "warehousesim/simulation/simulation.hpp"
 #include "warehousesim/tasks/task.hpp"
 #include "warehousesim/view/draw_list.hpp"
@@ -31,9 +32,22 @@ namespace warehousesim::view {
 
 // Everything visible in one frame of the fleet window, back to front: the map with its overlays
 // (buildScene, with the selection emphasised and a ring round every destination), what a click in
-// task entry would choose, and the panel. `drawn` is the snapshot to draw (usually blended).
+// task entry would choose, the performance dashboard if there are `metrics` to show, and the panel.
+// `drawn` is the snapshot to draw (usually blended).
 [[nodiscard]] DrawList buildFleetScene(const world::Warehouse& warehouse,
                                        const simulation::Snapshot& drawn,
-                                       const FleetController& controller);
+                                       const FleetController& controller,
+                                       const metrics::FleetMetrics* metrics = nullptr);
+
+// The performance dashboard over the top left of the map: metrics::dashboardLines as text, and
+// under it one bar for each sampling window of the run so far (the latest that fit), as high as the
+// number of tasks completed in the window. Its width and height in pixels are what it needs; if the
+// map area is too small for that it shows a single line saying so instead.
+inline constexpr double kMetricsPadding = 6.0;
+inline constexpr double kMetricsChartHeight = 36.0;
+inline constexpr double kMetricsBarWidth = 3.0;
+inline constexpr double kMetricsBarStep = 4.0;
+[[nodiscard]] ScreenRect metricsOverlayRect(const metrics::FleetMetrics& metrics,
+                                            const FleetController& controller);
 
 }  // namespace warehousesim::view

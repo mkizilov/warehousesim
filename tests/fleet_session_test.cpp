@@ -5,12 +5,14 @@
 #include <chrono>
 #include <cstdint>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <thread>
 #include <variant>
 #include <vector>
 
 #include "scenario_support.hpp"
+#include "scratch_dir.hpp"
 #include "warehousesim/core/rng.hpp"
 #include "warehousesim/simulation/commands.hpp"
 #include "warehousesim/simulation/runner.hpp"
@@ -53,11 +55,12 @@ struct Gui {
   FleetSession session;
   warehousesim::simulation::Snapshot drawn;
 
-  explicit Gui(std::uint64_t seed, double speed = 1.0)
+  explicit Gui(std::uint64_t seed, double speed = 1.0,
+               std::optional<FleetSession::MetricsExport> exportTo = std::nullopt)
       : runner(warehousesim::simulation::makeDemoSimulation(seed), milliseconds(1),
                *warehousesim::simulation::layoutScenario("demo")),
         controller(kWindow, runner.warehouse(), speed),
-        session(runner, controller) {
+        session(runner, controller, std::move(exportTo)) {
     runner.setSpeed(controller.speed());
     frame({});
   }
@@ -276,6 +279,103 @@ TEST(FleetSessionTest, SelectingRobotsAndTasksShowsThemInThePanel) {
   EXPECT_TRUE(gui.hasText("robot 2  "));
   gui.key(FleetKey::NextTask);
   EXPECT_TRUE(gui.controller.selectedTask().has_value());
+  gui.runner.stop();
+}
+
+// ---- the performance figures --------------------------------------------------------------------
+
+TEST(FleetMetricsSessionTest, TheFiguresAreFetchedOnlyWhileTheDashboardIsOn) {
+  Gui gui(3);
+  gui.runner.start(30);
+  ASSERT_TRUE(gui.runner.waitForTick(30, kTimeout));
+  gui.frame({});
+  EXPECT_FALSE(gui.session.metrics().has_value());
+  gui.key(FleetKey::ToggleMetrics);
+  ASSERT_TRUE(gui.session.metrics().has_value());
+  EXPECT_EQ(gui.session.metrics()->ticks, 30U);
+  EXPECT_EQ(gui.session.metrics()->tasksCompleted, gui.runner.snapshot().completedTasks);
+  gui.key(FleetKey::ToggleMetrics);
+  EXPECT_FALSE(gui.session.metrics().has_value());
+}
+
+TEST(FleetMetricsSessionTest, TheDashboardShowsTheLiveRunAndStartsOverWithARestart) {
+  Gui gui(3);
+  gui.pause();
+  gui.runner.start(40);
+  gui.key(FleetKey::ToggleMetrics);
+  EXPECT_EQ(gui.session.metrics()->ticks, 0U);
+  gui.pause();
+  ASSERT_TRUE(gui.runner.waitForTick(40, kTimeout));
+  gui.frame({});
+  EXPECT_EQ(gui.session.metrics()->ticks, 40U);
+  gui.pause();
+  gui.key(FleetKey::Reset);
+  for (int i = 0; i < 5000 && gui.runner.frame().epoch == 0; ++i) {
+    std::this_thread::sleep_for(milliseconds(1));
+  }
+  gui.frame({});
+  EXPECT_EQ(gui.session.metrics()->ticks, 0U);
+  gui.runner.stop();
+}
+
+TEST(FleetMetricsSessionTest, ExportingWithNoPlaceToWriteSaysSoAndWritesNothing) {
+  Gui gui(3);
+  gui.runner.start(10);
+  gui.key(FleetKey::ExportMetrics);
+  EXPECT_TRUE(gui.controller.messageIsError());
+  EXPECT_TRUE(gui.hasText("--metrics-csv")) << gui.controller.message();
+  gui.runner.stop();
+}
+
+TEST(FleetMetricsSessionTest, ExportingWritesTheThreeFilesOfTheRunWithItsSeedAndSaysSo) {
+  const warehousesim_test::ScratchDir dir("fleet_session_export");
+  const auto base = dir.file("gui");
+  Gui gui(3, 1.0, FleetSession::MetricsExport{base, {"demo", 0, 5}});
+  gui.runner.start(40);
+  ASSERT_TRUE(gui.runner.waitForTick(40, kTimeout));  // and it stops there
+  gui.key(FleetKey::ExportMetrics);
+  EXPECT_FALSE(gui.controller.messageIsError()) << gui.controller.message();
+  EXPECT_TRUE(gui.hasText("wrote")) << gui.controller.message();  // (the path wraps below it)
+
+  const auto m = gui.runner.metrics();
+  ASSERT_EQ(m.ticks, 40U);
+  EXPECT_EQ(warehousesim_test::readFile(dir.file("gui.runs.csv")),
+            warehousesim::metrics::runsCsv({{{"demo", 3, 5}, m}}));  // seed 3: the runner's
+  EXPECT_EQ(warehousesim_test::readFile(dir.file("gui.robots.csv")),
+            warehousesim::metrics::robotsCsv(m));
+  EXPECT_EQ(warehousesim_test::readFile(dir.file("gui.series.csv")),
+            warehousesim::metrics::seriesCsv(m));
+  gui.runner.stop();
+}
+
+TEST(FleetMetricsSessionTest, AnExportThatFailsShowsTheReasonAndTheRunGoesOn) {
+  const warehousesim_test::ScratchDir dir("fleet_session_export_fails");
+  Gui gui(3, 1.0, FleetSession::MetricsExport{dir.file("no/such/folder/gui"), {"demo", 0, 5}});
+  gui.runner.start();
+  gui.key(FleetKey::ExportMetrics);
+  EXPECT_TRUE(gui.controller.messageIsError());
+  EXPECT_NE(gui.controller.message().find("gui.runs.csv"), std::string::npos)
+      << gui.controller.message();  // (the panel cuts a long path; the message has all of it)
+  const auto tick = gui.runner.snapshot().tick;
+  EXPECT_TRUE(gui.runner.waitForTick(tick + 3, kTimeout));
+  gui.runner.stop();
+}
+
+TEST(FleetMetricsSessionTest, ExportingAndShowingTheDashboardLeaveTheRunExactlyAsItWas) {
+  const warehousesim_test::ScratchDir dir("fleet_session_export_pure");
+  Gui gui(5, 1.0, FleetSession::MetricsExport{dir.file("gui"), {"demo", 0, 5}});
+  gui.runner.start(90);
+  while (gui.runner.snapshot().tick < 90) {
+    InputEvents input;
+    input.fleetKeys = {FleetKey::ToggleMetrics, FleetKey::ExportMetrics};
+    gui.frame(input);
+    std::this_thread::sleep_for(std::chrono::microseconds(300));
+  }
+  ASSERT_TRUE(gui.runner.waitForTick(90, kTimeout));
+  auto reference = warehousesim::simulation::makeDemoSimulation(5);
+  reference.run(90);
+  EXPECT_EQ(json(gui.runner.snapshot()), json(reference.snapshot()));
+  EXPECT_TRUE(gui.runner.commandLog().empty());  // nothing of it was a command
   gui.runner.stop();
 }
 

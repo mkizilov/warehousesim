@@ -38,6 +38,9 @@ struct FleetOutput {
   // For SimulationRunner::setPaused() and setSpeed(): when steps happen, not what they compute.
   std::optional<bool> paused;
   std::optional<double> speed;
+  // The user asked for the performance figures to be written to files. Not a command: it reads the
+  // simulation's measurements and writes outside it, so it changes nothing in the simulation.
+  bool exportMetrics = false;
 };
 
 // Which cell of a new task the next click chooses.
@@ -52,6 +55,7 @@ enum class TaskEntry : std::uint8_t { None, Pickup, Dropoff };
 //   N, then click pickup, click dropoff  add a delivery task (1-4 first to choose its priority)
 //   Space, [ ]                           pause / resume, slower / faster
 //   R                                    start the scenario over
+//   M, E                                 performance dashboard, export it to CSV files
 //   P, O, wheel, drag, WASD, 0           routes, held cells, zoom, pan, fit
 //   Esc                                  cancel task entry, then clear the selection, then quit
 class FleetController {
@@ -80,6 +84,8 @@ class FleetController {
   [[nodiscard]] double speed() const noexcept { return view_.speed(); }
   [[nodiscard]] bool showPaths() const noexcept { return view_.showPaths(); }
   [[nodiscard]] bool showOccupied() const noexcept { return view_.showOccupied(); }
+  // The performance dashboard is on. Off at the start.
+  [[nodiscard]] bool showMetrics() const noexcept { return showMetrics_; }
   [[nodiscard]] std::optional<ScreenPoint> pointer() const noexcept { return view_.pointer(); }
   // The map cell under the pointer, if it is over the part of the map that can be clicked.
   [[nodiscard]] std::optional<core::Point> hoveredCell() const;
@@ -130,6 +136,7 @@ class FleetController {
   std::string message_;
   bool messageIsError_ = false;
   bool quit_ = false;
+  bool showMetrics_ = false;
 };
 
 }  // namespace warehousesim::view

@@ -70,6 +70,10 @@ std::optional<view::FleetKey> fleetKeyFor(SDL_Keycode key, SDL_Keymod mod, bool 
       return FleetKey::Priority4;
     case SDLK_R:
       return FleetKey::Reset;
+    case SDLK_M:
+      return FleetKey::ToggleMetrics;
+    case SDLK_E:
+      return FleetKey::ExportMetrics;
     case SDLK_ESCAPE:
       return FleetKey::Cancel;
     default:

@@ -7,10 +7,11 @@ headless library and CLI plus a separate SDL3 visualisation.
 core ← world ← planning ┐
 core ← robots ──────────┴← tasks ┐
         world, robots ← traffic ─┴← simulation ┐
-                                       ↑       ├← view (no SDL) ← rendering (SDL3) ← apps/gui, apps/editor
+        core ← metrics ──────────────┘   ↑       ├← view (no SDL) ← rendering (SDL3) ← apps/gui, apps/editor
                                   apps/cli     │
                                 (headless)     │
         world ← mapio (map files) ← editor ────┘
+   bench/fleet_bench: headless, on simulation + metrics
 ```
 
 | Module       | Contents                                                                  |
@@ -22,7 +23,8 @@ core ← robots ──────────┴← tasks ┐
 | `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
-| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios |
+| `metrics`    | simulated performance figures from plain observations: aggregation, derived rates, CSV and dashboard text (see Performance metrics); depends on `core` only |
+| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios, `MetricsCollector`, benchmark sweeps |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing (see Map editor) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize) and its file glue; no SDL, no GUI |
 | `view`       | `Camera`, draw lists (`buildScene()`, `buildFleetScene()`, `buildEditorScene()`), `ViewController`, `FleetController`, `FleetSession`, `EditorController`; no SDL, fully tested |
@@ -76,6 +78,8 @@ build/default/apps/warehousesim_gui --layout fulfilment --speed 2 --fps 60
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # render without a display
 build/default/apps/warehousesim_editor --file my-hall.json               # edit (or start) a map file
 build/default/apps/warehousesim_cli --map my-hall.json --ticks 500       # run a map made with it
+build/default/apps/warehousesim_cli --layout compact --ticks 3000 --metrics --metrics-csv out/compact
+build/release/bench/warehousesim_fleet_bench                              # layouts x fleet sizes x seeds
 ```
 
 Both `warehousesim_cli` and `warehousesim_gui` take `--map FILE` instead of `--layout NAME` (not both).
@@ -84,7 +88,11 @@ exit status 1; an unknown layout or conflicting options exit with status 2.
 
 `warehousesim_gui` options: `--seed N`, `--layout NAME` or `--map FILE`, `--tick-ms N` (fixed simulation step, default
 100 ms of real time at speed 1), `--speed X` (initial playback speed, 1/16 to 64), `--fps N` (frame cap,
-default 60), `--frames N` (exit after N frames; 0 = until closed).
+default 60), `--frames N` (exit after N frames; 0 = until closed), `--metrics-csv BASE` (where `E` writes
+the performance figures; the folder of BASE must exist).
+
+`warehousesim_cli` also takes `--metrics` (print the simulated performance dashboard to stderr after the
+run; the JSON on stdout is the same with or without it) and `--metrics-csv BASE` (write the three CSV files).
 
 `warehousesim_gui` is the fleet management interface: the map on the left, a panel on the right with the
 robots, the selected robot, the active and finished tasks, and a prompt. See "Fleet interface" below for
@@ -103,6 +111,8 @@ what it can do; the controls are:
 | drag with the middle or right button, arrow keys, WASD | pan |
 | `0` | fit the whole warehouse |
 | `P` / `O` | show / hide the planned routes of all robots (and a red cross on the cell a held-back robot may not enter) / the cells robots hold |
+| `M` | show / hide the performance dashboard (simulated figures, see Performance metrics) |
+| `E` | write the performance figures to `BASE.runs.csv`, `BASE.robots.csv` and `BASE.series.csv` (needs `--metrics-csv BASE`) |
 | Esc | cancel task entry; else clear the selection; else quit |
 | closing the window, Ctrl-C | quit (the worker thread is joined and SDL shut down) |
 
@@ -615,6 +625,163 @@ of service or edit the layout (the simulation can do all of these; they are not 
 always keeps the seed it started with unless a `ResetScenario{seed}` command says otherwise (the GUI has no
 key for that). The panel is left out of windows smaller than 720 x 400. Text is the SDL debug font, so the
 panel is 39 characters wide and long messages wrap into two lines.
+
+## Performance metrics
+
+Every figure in this section is **simulated**: it measures a model (ticks, grid cells, an abstract energy
+unit) running with a given seed, and says nothing about how a real robot or a real warehouse would perform.
+The dashboard, the CSV files and the benchmark all say so on their face: the dashboard's title ends
+"(simulated)" and its last line reads "Simulated results. Not a claim about real robots.", and every CSV row
+has a `basis` column that is always `simulated`.
+
+### What is measured
+
+A `metrics::MetricsAccumulator` is told the state after every tick as plain data (`metrics::TickObservation`)
+and keeps counts only. The adapter `simulation::MetricsCollector` builds those observations from a
+running `Simulation` by reading its public state: measuring never writes to the simulation, and a measured
+run is step-for-step the same run as an unmeasured one (`AMeasuredRunIsTheSameRunStepForStepAs...`).
+Each robot is in **exactly one activity per tick** (the one it ended the tick in): *moving* (driving to a
+pickup, a dropoff or a charger and given its next cell, so also while accelerating or turning), *waiting*
+(driving but refused its next cell), *handling* (loading or unloading), *charging*, *idle* or *out of
+service*. All the time figures come from that budget.
+
+| Figure | Definition | CSV column(s) |
+|--------|------------|---------------|
+| Tasks completed | tasks delivered during the interval (also failed, cancelled, and open at the end) | `tasks_completed`, `tasks_failed`, `tasks_cancelled`, `tasks_open_at_end` |
+| Tasks per simulated hour | completed ÷ simulated hours, where hours = ticks × `seconds_per_tick` ÷ 3600 (1 tick = 1 s unless told otherwise; the scale is arbitrary, not calibrated to any robot) | `tasks_per_sim_hour`, `tasks_per_robot_hour` |
+| Average task completion time | mean over completed tasks of (tick delivered − tick submitted), in ticks and simulated seconds. It **includes the wait in the queue**, so with a backlog it measures how long the served tasks had waited more than the trip | `avg_completion_ticks`, `avg_completion_sim_s`, `max_completion_ticks` |
+| Robot utilization | (moving + waiting + handling robot-ticks) ÷ (all robot-ticks − out-of-service). A charger trip is moving; charging is not busy | `utilization` |
+| Average travel distance | cells entered ÷ robots, and cells entered ÷ tasks completed (empty trips and charger trips included) | `cells_per_robot`, `cells_per_completed_task` |
+| Idle time | robot-ticks idle, and as a fraction of all robot-ticks | `idle_robot_ticks`, `idle_fraction` |
+| Waiting time | robot-ticks held back from the next cell, and as a fraction | `waiting_robot_ticks`, `waiting_fraction` |
+| Collision conflicts prevented | the number of **episodes** in which a robot was held back from a cell that another robot held or had reserved (consecutive ticks of waiting are one episode). `conflict_detections` is the raw number of clashes the reservation table found while planning, step by step | `conflicts_prevented`, `conflict_detections` |
+| Collisions that occurred | an audit that does not trust the thing that prevents them: two robots in one cell, or two robots that changed places, in a tick. Always 0 in the bundled scenarios | `collisions_occurred` |
+| Replanning frequency | routes replaced while a robot was under way (after a clash, to get round a robot, or after the layout changed), and per simulated hour; `searches` counts the cooperative searches run, successful or not | `replans`, `replans_per_sim_hour`, `reroutes`, `repaths`, `obstacle_repairs`, `searches` |
+| Estimated energy | idle ticks × idle drain + cells entered × cost per cell + handling ticks × handling drain, under a stated `EnergyModel` (default 1 / 15 / 2, the drain of the bundled robots that have a battery). Charging draws nothing | `energy_units_est`, `energy_units_per_task_est`, `energy_idle_est`, `energy_moving_est`, `energy_handling_est` |
+
+A figure whose denominator is zero (no time observed, no robot, no task completed) is **undefined**, not 0:
+an empty CSV field and `n/a` on the dashboard, never `nan`. A zero numerator over a real denominator is a
+real 0. "Conflicts prevented" means traffic control stopped a robot entering a cell another robot held or
+had reserved; the world's own claims would also have refused the cell, so it is a count of clashes the
+planner avoided, not of crashes a world without it would have had.
+
+The estimate uses one stated model for every layout rather than each robot's own drain, so that the demo
+hall (whose robots have no battery model) is not reported as using no energy; `simulation::energyModelOf()`
+gives the simulation's own, and a test keeps the standard model equal to the bundled robots' drain.
+
+Time is simulated time only: nothing in the metrics, the collector or the benchmark reads a clock. A run
+that is observed from the middle (`MetricsCollector` built on a simulation already at tick N) gives exactly
+the difference of two measurements from the start (`MeasuringFromTheMiddleGivesTheDifferenceOf...`).
+
+### Dashboard and CSV
+
+- **Dashboard.** In the GUI, `M` shows the figures over the top left of the map (every number above, the
+  energy model stated beside the estimate, the disclaimer last) and one bar for each sampling window of the
+  run so far — tasks completed in each window of 100 ticks, the latest that fit. It reads the runner's live
+  figures, which cover every step the worker took; a restart (`R`) starts the measurement over too. In a
+  window too small for it, it says so on one line. `warehousesim_cli --metrics` prints the same text to
+  stderr.
+- **CSV.** `E` in the GUI, or `warehousesim_cli --metrics-csv BASE`, writes `BASE.runs.csv` (one row of
+  every figure above), `BASE.robots.csv` (one row per robot with its time budget in ticks) and
+  `BASE.series.csv` (one row per sampling window). Numbers are written with fixed decimals in the C locale,
+  fields are quoted per RFC 4180, each file is written whole to a temporary name and renamed over the real
+  one, and the same run always gives the same bytes. The runs file is the contract (its header is pinned by
+  a test); `warehousesim_fleet_bench --csv FILE` writes the same columns, one row per run.
+
+### Benchmark
+
+`warehousesim_fleet_bench` runs every combination of layout, fleet size and seed for a fixed number of
+ticks with the same task rate, and prints one table with the seeds pooled (counts added up, so every
+figure is total over total). Defaults: all three layouts × fleets of 1, 2, 4 and 8 robots × seeds 1, 2, 3 ×
+3000 ticks (50 simulated minutes at 1 tick = 1 s), a new random task every 5 ticks. Fleet size is chosen
+with `ScenarioOptions::robots`: robots start on the charging stations first and then on open floor, spaced
+at least two cells apart, in reading order; asking for the number a layout already gets changes nothing,
+and the task stream depends on the seed alone, so fleets of different sizes are offered the same work.
+
+It is a benchmark and not just a printout because it **fails** (exit 1) if any run has two robots overlap or
+change places, if a task is unaccounted for (completed + failed + cancelled + open ≠ submitted), if a robot
+is not accounted for in every tick, or if running the first case twice gives different results.
+`ctest` runs `--quick` (150 ticks, fleets 1 and 2, seed 1) as `fleet_bench_smoke`.
+
+Baseline (this commit; the full default sweep, 36 runs, takes about 2 seconds; all figures simulated):
+
+| layout | robots | runs | tasks/h | tasks/robot-h | mean done (s) | backlog | utilization % | waiting % | idle % | charging % | cells/task | conflicts/h | replans/h | energy/task |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| demo | 1 | 3 | 77.6 | 77.6 | 542.2 | 535.3 | 97.8 | 0.0 | 2.2 | 0.0 | 24.4 | 0.0 | 0.0 | 375.5 |
+| demo | 2 | 3 | 145.6 | 72.8 | 295.1 | 478.7 | 97.9 | 1.8 | 2.1 | 0.0 | 25.2 | 33.6 | 54.8 | 387.1 |
+| demo | 4 | 3 | 260.0 | 65.0 | 420.9 | 383.3 | 97.9 | 4.4 | 2.1 | 0.0 | 26.6 | 164.0 | 323.6 | 407.6 |
+| demo | 8 | 3 | 444.0 | 55.5 | 395.3 | 230.0 | 97.9 | 9.9 | 2.1 | 0.0 | 27.4 | 746.0 | 1306.8 | 420.9 |
+| compact | 1 | 3 | 73.2 | 73.2 | 555.3 | 539.0 | 95.0 | 0.0 | 2.0 | 2.9 | 26.2 | 0.0 | 0.0 | 401.7 |
+| compact | 2 | 3 | 127.6 | 63.8 | 441.0 | 493.7 | 95.6 | 3.4 | 1.8 | 2.6 | 27.6 | 61.6 | 126.4 | 423.6 |
+| compact | 4 | 3 | 215.6 | 53.9 | 325.2 | 420.3 | 96.1 | 9.3 | 1.7 | 2.2 | 28.7 | 344.8 | 547.2 | 440.4 |
+| compact | 8 | 3 | 291.6 | 36.5 | 474.6 | 357.0 | 96.9 | 20.1 | 1.6 | 1.5 | 33.0 | 1712.8 | 2265.6 | 504.5 |
+| fulfilment | 1 | 3 | 51.6 | 51.6 | 388.9 | 557.0 | 95.5 | 0.0 | 1.4 | 3.1 | 38.8 | 0.0 | 0.0 | 591.3 |
+| fulfilment | 2 | 3 | 100.4 | 50.2 | 562.5 | 516.3 | 95.5 | 1.4 | 1.5 | 3.0 | 38.8 | 21.2 | 51.2 | 591.4 |
+| fulfilment | 4 | 3 | 190.0 | 47.5 | 220.0 | 441.7 | 95.5 | 3.3 | 1.6 | 2.9 | 39.5 | 106.8 | 227.6 | 602.3 |
+| fulfilment | 8 | 3 | 332.4 | 41.5 | 508.6 | 323.0 | 95.9 | 7.7 | 1.8 | 2.4 | 41.3 | 580.4 | 1109.6 | 629.6 |
+
+`backlog` is the mean number of tasks still open at the end of a run. Obtained with Apple clang at `-O1
+-ffp-contract=off` through the local verification harness, not the CMake Release preset (which I could
+not run); a simulation's output does not depend on timing, but I have not compared optimisation levels or
+platforms, and the numbers are simulation outputs, not performance measurements of the code.
+
+How to read it, and how not to:
+
+- **Every row is saturated.** The scenarios offer a task every 5 ticks, which is 720 tasks per simulated hour
+  at 1 tick = 1 s; no fleet here gets near that (the best is 444), so the backlog is in the hundreds and the
+  robots are busy 95–98% of the time. Utilization therefore tells almost nothing in this table: it is high
+  because there is always work, and it counts waiting as busy. To see a fleet that keeps up, lower the rate
+  (`--spawn 25`; the second table below).
+- **More robots give more throughput, with diminishing returns.** Tasks per hour rise with the fleet in all
+  three layouts (1 → 8 robots: demo ×5.7, fulfilment ×6.4, compact ×4.0) while tasks per robot-hour fall
+  (demo 77.6 → 55.5, compact 73.2 → 36.5, fulfilment 51.6 → 41.5).
+- **The small room congests first.** With 8 robots the 12×8 `compact` room has robots waiting 20.1% of the
+  time (demo 9.9%, fulfilment 7.7%), preventing about 1700 conflicts per simulated hour, driving more cells
+  per task (33.0 against 26.2 for one robot) and getting the least out of the extra robots. I did not
+  investigate why beyond what the table shows.
+- **`mean done` is not a trip time and is not monotonic in the fleet size.** With hundreds of open tasks it
+  mostly reflects how long the tasks that happened to be served had waited (priority and age decide who is
+  served), and the three seeds are few. Compare it only between runs that are not backlogged.
+- **Three seeds are a baseline, not a confidence interval.** The numbers are exact for these seeds; I make
+  no claim about how much they vary with others (the demo hall's throughput varies by about ±3 tasks per
+  500 ticks between seeds, see the collision-avoidance notes).
+
+The same sweep with work the fleet can keep up with (`warehousesim_fleet_bench --spawn 25 --layouts
+demo,fulfilment`, a task every 25 ticks, 144 per simulated hour):
+
+| layout | robots | runs | tasks/h | tasks/robot-h | mean done (s) | backlog | utilization % | waiting % | idle % | charging % | cells/task | conflicts/h | replans/h | energy/task |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| demo | 1 | 3 | 74.8 | 74.8 | 515.5 | 57.7 | 97.9 | 0.0 | 2.1 | 0.0 | 25.9 | 0.0 | 0.0 | 396.9 |
+| demo | 2 | 3 | 138.4 | 69.2 | 84.6 | 4.7 | 96.1 | 1.8 | 3.9 | 0.0 | 26.1 | 31.2 | 67.2 | 401.3 |
+| demo | 4 | 3 | 142.8 | 35.7 | 50.3 | 1.0 | 49.1 | 1.8 | 50.9 | 0.0 | 24.6 | 81.6 | 90.4 | 428.0 |
+| demo | 8 | 3 | 129.6 | 16.2 | 60.9 | 2.0 | 36.9 | 12.6 | 63.1 | 0.0 | 26.9 | 212.0 | 155.6 | 551.8 |
+| fulfilment | 1 | 3 | 50.8 | 50.8 | 480.7 | 77.7 | 95.5 | 0.0 | 1.4 | 3.1 | 39.5 | 0.0 | 0.0 | 601.0 |
+| fulfilment | 2 | 3 | 100.0 | 50.0 | 361.4 | 36.7 | 94.7 | 1.2 | 2.4 | 2.9 | 38.7 | 16.8 | 50.4 | 590.7 |
+| fulfilment | 4 | 3 | 142.0 | 35.5 | 70.0 | 1.7 | 69.6 | 2.0 | 28.4 | 2.1 | 38.9 | 62.8 | 156.0 | 619.9 |
+| fulfilment | 8 | 3 | 140.0 | 17.5 | 69.8 | 2.3 | 35.7 | 2.6 | 63.5 | 0.8 | 38.6 | 78.4 | 144.4 | 718.2 |
+
+Here throughput stops at the offered load (about 140–143 tasks per hour for 4 and 8 robots), the backlog
+drops to one or two tasks, mean completion time falls to 50–70 s, and utilization tells something at last:
+it halves or worse as robots are added past what the work needs. Extra robots then only cost: in the demo hall
+8 robots wait 12.6% of the time (against 1.8% for 4), complete fewer tasks per hour than 4 (129.6 against
+142.8; I did not check how much of that is seed noise), and the energy estimate per task rises because idle
+robots draw power in the model (idle drain 1 per tick).
+
+### Limits
+
+- The time scale (1 tick = 1 s) and the energy model are stand-ins chosen for the model; nothing calibrates
+  them to a real vehicle, so absolute values (tasks per hour, energy units) carry no real-world meaning.
+  Ratios between runs of the same model do.
+- Energy is an estimate from the time budget and distance, not what the simulated batteries lost (the two
+  agree exactly when the estimate is given the robots' own drain, which a test checks).
+- Waiting is what the engine refused: a robot that stands still because its path is empty, or while it
+  rotates, is not "waiting" here. A robot that is refused its cell and is then pushed aside by another
+  robot's sidestep in the same step is still counted as waiting in that step, although it ended it one
+  cell away (seen in the 8-robot runs of all three layouts; in each such step the robot was at rest). A robot that drove part of
+  a step and was refused only after it had stopped is moving in that step, not waiting.
+- The sampling windows (100 ticks, the latest 240 kept) bound the memory of a long run; only the dashboard
+  chart and the series CSV use them.
+- A restart or a different seed is a different run: the figures start over, they are never carried across.
 
 ## Map editor and map files
 

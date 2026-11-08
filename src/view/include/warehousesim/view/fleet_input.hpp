@@ -13,13 +13,15 @@ enum class FleetKey : std::uint8_t {
   PreviousRobot,
   NextTask,  // select the next task in the lists, wrapping round
   PreviousTask,
-  NewTask,    // start making a task: click a pickup cell, then a dropoff cell
-  Priority1,  // low: the priority of the task being made or, if none is, of the selected task
-  Priority2,  // normal
-  Priority3,  // high
-  Priority4,  // urgent
-  Reset,      // start the scenario over
-  Cancel      // leave task entry; else clear the selection; else quit
+  NewTask,        // start making a task: click a pickup cell, then a dropoff cell
+  Priority1,      // low: the priority of the task being made or, if none is, of the selected task
+  Priority2,      // normal
+  Priority3,      // high
+  Priority4,      // urgent
+  Reset,          // start the scenario over
+  Cancel,         // leave task entry; else clear the selection; else quit
+  ToggleMetrics,  // show / hide the performance dashboard
+  ExportMetrics   // write the performance figures to the CSV files, if the program has any
 };
 
 }  // namespace warehousesim::view

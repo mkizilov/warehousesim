@@ -233,6 +233,7 @@ void Simulation::abandon(Robot& robot) {
 // ---- the layout changing under the robots -------------------------------------------------------
 
 void Simulation::rebuildTraffic() {
+  trafficCarried_ += traffic_.stats();
   traffic_ = traffic::TrafficController(world_.layout(), config_.reservationHorizon);
 }
 

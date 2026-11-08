@@ -1,11 +1,30 @@
 #include "warehousesim/view/fleet_session.hpp"
 
+#include <string>
+#include <utility>
+
 #include "warehousesim/view/interpolation.hpp"
 
 namespace warehousesim::view {
 
-FleetSession::FleetSession(simulation::SimulationRunner& runner, FleetController& controller)
-    : runner_(runner), controller_(controller) {}
+FleetSession::FleetSession(simulation::SimulationRunner& runner, FleetController& controller,
+                           std::optional<MetricsExport> exportTo)
+    : runner_(runner), controller_(controller), exportTo_(std::move(exportTo)) {}
+
+void FleetSession::exportMetrics() {
+  if (!exportTo_) {
+    controller_.report("nowhere to write the metrics: start with --metrics-csv BASE", true);
+    return;
+  }
+  metrics::RunLabel label = exportTo_->label;
+  label.seed = runner_.seed();
+  const std::string base = exportTo_->base.string();
+  if (const auto problem = metrics::writeRunFiles(exportTo_->base, label, runner_.metrics())) {
+    controller_.report(*problem, true);
+    return;
+  }
+  controller_.report("wrote " + base + ".runs.csv, .robots.csv and .series.csv", false);
+}
 
 simulation::Snapshot FleetSession::step(const InputEvents& input, double frameSeconds) {
   const simulation::FrameState frame = runner_.frame();
@@ -33,6 +52,13 @@ simulation::Snapshot FleetSession::step(const InputEvents& input, double frameSe
     if (!runner_.post(command)) {
       controller_.report("too many commands waiting; try again", true);
     }
+  }
+  if (output.exportMetrics) {
+    exportMetrics();
+  }
+  metrics_.reset();
+  if (controller_.showMetrics()) {
+    metrics_ = runner_.metrics();
   }
   return drawn;
 }

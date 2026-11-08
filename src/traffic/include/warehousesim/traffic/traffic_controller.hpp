@@ -41,6 +41,13 @@ struct TrafficStats {
   std::uint64_t swaps = 0;
   std::uint64_t inTheWay = 0;
 
+  TrafficStats& operator+=(const TrafficStats& other) noexcept {
+    blocked += other.blocked;
+    vertex += other.vertex;
+    swaps += other.swaps;
+    inTheWay += other.inTheWay;
+    return *this;
+  }
   bool operator==(const TrafficStats&) const = default;
 };
 

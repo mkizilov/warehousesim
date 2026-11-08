@@ -21,9 +21,16 @@ constexpr Seconds kMinSleep{0.0002};
 
 SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
                                    ScenarioFactory scenario)
+    : SimulationRunner(std::move(simulation), stepDuration, std::move(scenario),
+                       metrics::MetricsOptions()) {}
+
+SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
+                                   ScenarioFactory scenario, metrics::MetricsOptions metricsOptions)
     : simulation_(std::move(simulation)),
       warehouse_(simulation_.warehouse()),
       scenario_(std::move(scenario)),
+      metricsOptions_(metricsOptions),
+      collector_(simulation_, metricsOptions),
       stepper_(std::chrono::duration_cast<Seconds>(stepDuration).count()),
       latest_(simulation_.snapshot()),
       previous_(latest_) {}
@@ -107,6 +114,11 @@ std::uint64_t SimulationRunner::seed() const {
   return simulation_.config().seed;
 }
 
+metrics::FleetMetrics SimulationRunner::metrics() const {
+  const std::scoped_lock lock(mutex_);
+  return collector_.report();
+}
+
 Snapshot SimulationRunner::snapshot() const {
   const std::scoped_lock lock(mutex_);
   return latest_;
@@ -141,6 +153,7 @@ CommandOutcome SimulationRunner::restart(const ResetScenario& command) {
       return {false, "the scenario would build another layout; not restarted", std::nullopt};
     }
     simulation_ = std::move(fresh);
+    collector_ = MetricsCollector(simulation_, metricsOptions_);
   } catch (const std::exception& error) {
     return {false, std::string("could not restart: ") + error.what(), std::nullopt};
   }
@@ -232,6 +245,7 @@ void SimulationRunner::loop() {
     while (due > 0 && shouldStep()) {
       beforeLastStep = simulation_.snapshot();
       simulation_.step();
+      collector_.observe(simulation_);
       stepped = true;
       --due;
     }

@@ -12,7 +12,9 @@
 
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
+#include "warehousesim/metrics/fleet_metrics.hpp"
 #include "warehousesim/simulation/commands.hpp"
+#include "warehousesim/simulation/metrics_collector.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/simulation.hpp"
 #include "warehousesim/world/warehouse.hpp"
@@ -54,6 +56,9 @@ class SimulationRunner {
   // without one, a reset is refused. Throws std::invalid_argument unless stepDuration is positive.
   SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
                    ScenarioFactory scenario = nullptr);
+  // The same, with the metrics measured in the time scale and energy model given.
+  SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
+                   ScenarioFactory scenario, metrics::MetricsOptions metricsOptions);
   ~SimulationRunner();
 
   SimulationRunner(const SimulationRunner&) = delete;
@@ -85,6 +90,11 @@ class SimulationRunner {
   // the state of the run at any tick.
   [[nodiscard]] std::uint64_t seed() const;
 
+  // The performance figures of the run in progress (since the start, or the last restart): every
+  // step the worker has taken, none missed. A copy, safe to read from any thread. Measuring only
+  // reads the simulation; a runner's state is the same with or without anyone asking.
+  [[nodiscard]] metrics::FleetMetrics metrics() const;
+
   [[nodiscard]] Snapshot snapshot() const;
   // The state to draw right now. While stepping, alpha grows with real time since the last step
   // (scaled by the playback speed); while paused or finished it stays where it was, so the picture
@@ -108,6 +118,8 @@ class SimulationRunner {
   Simulation simulation_;
   const world::Warehouse warehouse_;
   const ScenarioFactory scenario_;
+  const metrics::MetricsOptions metricsOptions_;
+  MetricsCollector collector_;
 
   mutable std::mutex mutex_;
   std::condition_variable wake_;

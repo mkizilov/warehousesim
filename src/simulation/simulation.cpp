@@ -59,6 +59,7 @@ Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& rob
   nextSearch_.assign(robots_.size(), 0);
   boostUntil_.assign(robots_.size(), 0);
   movedThisStep_.assign(robots_.size(), false);
+  heldBack_.assign(robots_.size(), false);
   deferred_.assign(robots_.size(), 0);
   workScale_.assign(robots_.size(), 1);
   reservedShare_.assign(robots_.size(), false);
@@ -199,7 +200,7 @@ Snapshot Simulation::snapshot() const {
   result.completedTasks = tasks_.count(tasks::TaskStatus::Completed);
   result.failedTasks = tasks_.count(tasks::TaskStatus::Failed);
   result.cancelledTasks = tasks_.count(tasks::TaskStatus::Cancelled);
-  result.traffic = traffic_.stats();
+  result.traffic = trafficStats();
   result.replans = replans_;
   result.planning = planningStats_;
   return result;
@@ -244,6 +245,22 @@ void Simulation::assignTasks() {
     robot.beginTask(assignment.task, pickup, std::move(*path));
     progress_.reset(robot.id());
   }
+}
+
+std::optional<RobotWait> Simulation::heldBack(core::RobotId id) const {
+  if (!id.valid() || id.value > robots_.size()) {
+    throw std::out_of_range("unknown robot id");
+  }
+  const Robot& robot = robots_[id.value - 1];
+  if (!heldBack_[id.value - 1] || !robot.nextStep()) {
+    return std::nullopt;
+  }
+  const Point cell = *robot.nextStep();
+  const traffic::TrafficPlan& plan = plans_[id.value - 1];
+  if (plan.waiting() && !plan.inTheWay) {
+    return RobotWait{cell, plan.conflict->kind, plan.conflict->other};
+  }
+  return RobotWait{cell, traffic::ConflictKind::Vertex, world_.occupantAt(cell)};
 }
 
 // A robot that stood still this step because the next cell was not its to have: the reservation
@@ -297,6 +314,7 @@ bool Simulation::outranks(core::RobotId a, core::RobotId b) const {
 // One robot's turn: finish whatever its state allows to finish right now, notice a flat
 // battery, let a tick of time pass in the current state, then advance along the path.
 void Simulation::updateRobot(Robot& robot) {
+  heldBack_[robot.id().value - 1] = false;
   settle(robot);
   breakDownIfDepleted(robot);
   robot.elapseTick();
@@ -472,6 +490,7 @@ void Simulation::moveAlongPath(Robot& robot, const traffic::TrafficPlan& plan) {
         }
         if (!freed) {
           (void)robot.advance(0.0);  // waits where it is
+          heldBack_[robot.id().value - 1] = round == 0;
           return;
         }
       }
@@ -586,6 +605,7 @@ bool Simulation::tryRepath(Robot& robot, const planning::BlockedSet& blocked) {
     return false;
   }
   robot.setPath(std::move(*path));
+  ++planningStats_.repaths;
   return true;
 }
 

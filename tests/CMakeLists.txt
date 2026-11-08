@@ -37,6 +37,16 @@ warehousesim_add_test(warehousesim_mapio_tests
     map_file_test.cpp
   LIBS warehousesim::mapio)
 
+# Aggregation and export of simulated performance figures: plain observations in, numbers and CSV
+# out. It needs nothing but core, so no simulation, world, view, rendering or SDL. The file tests write
+# only below the working directory (see scratch_dir.hpp).
+warehousesim_add_test(warehousesim_metrics_tests
+  SOURCES
+    fleet_metrics_test.cpp
+    metrics_accumulator_test.cpp
+    metrics_export_test.cpp
+  LIBS warehousesim::metrics)
+
 # The editing model needs the world and the map file format but no simulation, view, rendering or SDL.
 warehousesim_add_test(warehousesim_editor_tests
   SOURCES
@@ -97,6 +107,7 @@ warehousesim_add_test(warehousesim_task_tests
 warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
+    benchmark_test.cpp
     collision_avoidance_test.cpp
     commands_test.cpp
     cooperative_planning_test.cpp
@@ -108,9 +119,12 @@ warehousesim_add_test(warehousesim_tests
     fleet_session_test.cpp
     interpolation_test.cpp
     map_simulation_test.cpp
+    metrics_collector_test.cpp
     movement_test.cpp
     runner_commands_test.cpp
+    runner_metrics_test.cpp
     runner_test.cpp
+    scenario_options_test.cpp
     scene_test.cpp
     simulation_dispatch_test.cpp
     simulation_test.cpp

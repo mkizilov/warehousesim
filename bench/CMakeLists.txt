@@ -15,3 +15,17 @@ endif()
 if(WAREHOUSESIM_BUILD_TESTS)
   add_test(NAME planning_bench_smoke COMMAND warehousesim_planning_bench --quick)
 endif()
+
+# Headless fleet benchmark: layouts x fleet sizes x fixed seeds, measured by the metrics module. All
+# its results are simulated. Its --quick run checks that no two robots ever overlap or swap, that
+# every task is accounted for and that a run reproduces exactly; it fails on any of them.
+add_executable(warehousesim_fleet_bench fleet_bench.cpp)
+target_include_directories(warehousesim_fleet_bench PRIVATE "${CMAKE_SOURCE_DIR}/apps/common")
+target_link_libraries(warehousesim_fleet_bench PRIVATE warehousesim::simulation)
+warehousesim_configure_target(warehousesim_fleet_bench)
+
+if(WAREHOUSESIM_BUILD_TESTS)
+  add_test(NAME fleet_bench_smoke
+    COMMAND warehousesim_fleet_bench --quick
+            --csv ${CMAKE_CURRENT_BINARY_DIR}/fleet_bench_smoke.csv)
+endif()

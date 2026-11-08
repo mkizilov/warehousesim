@@ -15,6 +15,9 @@
 #include <vector>
 
 #include "warehousesim/core/rng.hpp"
+#include "warehousesim/metrics/export.hpp"
+#include "warehousesim/metrics/fleet_metrics.hpp"
+#include "warehousesim/view/fleet_scene.hpp"
 #include "warehousesim/view/scene.hpp"
 #include "warehousesim/view/scene_parts.hpp"
 
@@ -125,7 +128,36 @@ struct Rig {
     frame(input);
   }
   DrawList scene() const { return buildFleetScene(hall(), snapshot, controller); }
+  DrawList sceneWith(const warehousesim::metrics::FleetMetrics* metrics) const {
+    return buildFleetScene(hall(), snapshot, controller, metrics);
+  }
 };
+
+// Performance figures with round numbers and a few sampling windows to draw bars for.
+warehousesim::metrics::FleetMetrics measured(
+    std::vector<std::uint64_t> completedPerWindow = std::vector<std::uint64_t>()) {
+  warehousesim::metrics::FleetMetrics m;
+  m.ticks = 3600;
+  for (std::uint32_t i = 1; i <= 2; ++i) {
+    warehousesim::metrics::RobotMetrics r;
+    r.id = RobotId{i};
+    r.budget.ticks[0] = 1800;  // moving
+    r.budget.ticks[4] = 1800;  // idle
+    m.robots.push_back(r);
+  }
+  m.tasksCompleted = 30;
+  m.completionTicksTotal = 6000;
+  std::uint64_t tick = 0;
+  for (const std::uint64_t completed : completedPerWindow) {
+    warehousesim::metrics::MetricsSample sample;
+    tick += 100;
+    sample.tick = tick;
+    sample.windowTicks = 100;
+    sample.tasksCompleted = completed;
+    m.samples.push_back(sample);
+  }
+  return m;
+}
 
 std::vector<const Text*> texts(const DrawList& list) {
   std::vector<const Text*> found;
@@ -348,7 +380,7 @@ TEST(FleetTextTest, EveryHelpLineFitsThePanelAndTheHelpMentionsEveryWayOfDriving
     all += line + "\n";
   }
   for (const char* part : {"select", "Tab", "new task", "priority", "pause", "speed", "restart",
-                           "routes", "zoom", "pan", "Esc"}) {
+                           "routes", "zoom", "pan", "Esc", "metrics", "export"}) {
     EXPECT_TRUE(contains(all, part)) << part;
   }
 }
@@ -566,6 +598,222 @@ TEST(FleetSceneTest, TaskEntryMarksThePickupChosenAndTheCellUnderThePointer) {
   EXPECT_EQ(diamonds(after, inset(cam.cellRect(P(6, 5)), 0.02)), 0U);
   EXPECT_FALSE(hasWhiteOutline(after, cam.cellRect(P(7, 5))));
   EXPECT_TRUE(rig.controller.hoveredCell().has_value());
+}
+
+// ---- the performance dashboard ------------------------------------------------------------------
+
+TEST(FleetDashboardTest, ItIsDrawnOnlyWhenItIsSwitchedOnAndThereAreFiguresToShow) {
+  Rig rig;
+  const auto figures = measured();
+  EXPECT_TRUE(findText(rig.sceneWith(&figures), "FLEET METRICS") == nullptr);  // off
+  rig.key(FleetKey::ToggleMetrics);
+  EXPECT_TRUE(findText(rig.sceneWith(nullptr), "FLEET METRICS") == nullptr);  // nothing to show
+  EXPECT_TRUE(findText(rig.sceneWith(&figures), "FLEET METRICS") != nullptr);
+  rig.key(FleetKey::ToggleMetrics);
+  EXPECT_TRUE(findText(rig.sceneWith(&figures), "FLEET METRICS") == nullptr);
+}
+
+TEST(FleetDashboardTest, EveryLineOfTheDashboardIsDrawnInOrderAndTheDisclaimerIsNeverLeftOut) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured();
+  const auto expected = warehousesim::metrics::dashboardLines(figures);
+  const DrawList list = rig.sceneWith(&figures);
+  std::size_t from = 0;
+  for (const std::string& line : expected) {
+    bool found = false;
+    for (; from < list.commands.size() && !found; ++from) {
+      const auto* text = std::get_if<Text>(&list.commands[from]);
+      found = text != nullptr && text->text == line;
+    }
+    EXPECT_TRUE(found) << "missing or out of order: " << line;
+  }
+  EXPECT_TRUE(findText(list, std::string(warehousesim::metrics::kDisclaimer)) != nullptr);
+  EXPECT_TRUE(findText(list, "(simulated)") != nullptr);
+}
+
+TEST(FleetDashboardTest, TheTitleAndTheDisclaimerStandOutFromTheFiguresBetweenThem) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured();
+  const auto lines = warehousesim::metrics::dashboardLines(figures);
+  ASSERT_GE(lines.size(), 3U);
+  const DrawList list = rig.sceneWith(&figures);
+  const Text* title = findText(list, lines.front());
+  const Text* disclaimer = findText(list, lines.back());
+  ASSERT_TRUE(title != nullptr);
+  ASSERT_TRUE(disclaimer != nullptr);
+  for (std::size_t i = 1; i + 1 < lines.size(); ++i) {
+    const Text* body = findText(list, lines[i]);
+    ASSERT_TRUE(body != nullptr) << lines[i];
+    EXPECT_FALSE(body->color == title->color) << lines[i];
+    EXPECT_FALSE(body->color == disclaimer->color) << lines[i];
+    EXPECT_TRUE(body->color == findText(list, lines[1])->color) << lines[i];
+  }
+  EXPECT_FALSE(title->color == disclaimer->color);
+}
+
+TEST(FleetDashboardTest, ItSitsInsideTheMapAreaAboveTheStatusBarAndItsTextInsideItsBacking) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured({3, 5, 4});
+  const ScreenRect box = warehousesim::view::metricsOverlayRect(figures, rig.controller);
+  const auto canvas = rig.controller.layout().canvas;
+  EXPECT_GE(box.x, 0.0);
+  EXPECT_LE(box.right(), static_cast<double>(canvas.width));
+  EXPECT_GE(box.y, warehousesim::view::kRulerThickness);
+  EXPECT_LE(box.bottom(),
+            static_cast<double>(canvas.height) - warehousesim::view::kStatusBarHeight);
+  const DrawList list = rig.sceneWith(&figures);
+  EXPECT_TRUE(hasFill(list, box));  // the backing
+  for (const auto& line : warehousesim::metrics::dashboardLines(figures)) {
+    const Text* text = findText(list, line);
+    ASSERT_TRUE(text != nullptr) << line;
+    EXPECT_GE(text->position.x, box.x);
+    EXPECT_LE(text->position.x + kGlyphSize * static_cast<double>(text->text.size()), box.right());
+    EXPECT_GE(text->position.y, box.y);
+    EXPECT_LE(text->position.y + kGlyphSize, box.bottom());
+  }
+}
+
+TEST(FleetDashboardTest, ItIsDrawnOverTheMapAndUnderThePanel) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured();
+  const DrawList list = rig.sceneWith(&figures);
+  const ScreenRect box = warehousesim::view::metricsOverlayRect(figures, rig.controller);
+  const ScreenRect panel = rig.controller.layout().panel;
+  std::size_t backing = list.commands.size();
+  std::size_t panelFill = list.commands.size();
+  for (std::size_t i = 0; i < list.commands.size(); ++i) {
+    const auto* fill = std::get_if<FillRect>(&list.commands[i]);
+    if (fill == nullptr) {
+      continue;
+    }
+    if (near(fill->rect.x, box.x) && near(fill->rect.y, box.y) &&
+        near(fill->rect.width, box.width)) {
+      backing = i;
+    }
+    if (near(fill->rect.x, panel.x) && near(fill->rect.width, panel.width) &&
+        near(fill->rect.height, panel.height)) {
+      panelFill = i;
+    }
+  }
+  ASSERT_LT(backing, list.commands.size());
+  ASSERT_LT(panelFill, list.commands.size());
+  EXPECT_LT(backing, panelFill);
+  const ScreenRect body = inset(rig.controller.camera().cellRect(P(4, 3)), 0.15);
+  std::size_t robot = list.commands.size();
+  for (std::size_t i = 0; i < list.commands.size() && robot == list.commands.size(); ++i) {
+    const auto* fill = std::get_if<FillRect>(&list.commands[i]);
+    if (fill != nullptr && near(fill->rect.x, body.x) && near(fill->rect.width, body.width)) {
+      robot = i;
+    }
+  }
+  ASSERT_LT(robot, list.commands.size());
+  EXPECT_LT(robot, backing);
+}
+
+const Color kBarColor{110, 200, 120};
+
+std::vector<ScreenRect> bars(const DrawList& list) {
+  std::vector<ScreenRect> found;
+  for (const auto& command : list.commands) {
+    const auto* fill = std::get_if<FillRect>(&command);
+    if (fill != nullptr && fill->color == kBarColor && near(fill->rect.width, 3.0)) {
+      found.push_back(fill->rect);
+    }
+  }
+  return found;
+}
+
+TEST(FleetDashboardTest, OneBarForEveryWindowAsHighAsTheTasksDoneInIt) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured({2, 4, 0, 1});
+  const auto found = bars(rig.sceneWith(&figures));
+  ASSERT_EQ(found.size(), 3U);  // the empty window has no bar
+  EXPECT_NEAR(found[0].height, 36.0 * 2.0 / 4.0, 1e-9);
+  EXPECT_NEAR(found[1].height, 36.0, 1e-9);  // the busiest window fills the chart
+  EXPECT_NEAR(found[2].height, 36.0 * 1.0 / 4.0, 1e-9);
+  EXPECT_NEAR(found[1].x - found[0].x, 4.0, 1e-9);  // 3 wide, one apart
+  EXPECT_NEAR(found[2].x - found[1].x, 8.0, 1e-9);  // a gap where the empty window is
+  for (const ScreenRect& bar : found) {
+    EXPECT_NEAR(bar.bottom(), found[0].bottom(), 1e-9);  // all stand on one line
+  }
+}
+
+TEST(FleetDashboardTest, WithManyWindowsOnlyTheLatestThatFitAreDrawn) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  std::vector<std::uint64_t> windows(400, 1);
+  windows.back() = 7;  // the newest
+  const auto figures = measured(windows);
+  const auto found = bars(rig.sceneWith(&figures));
+  const ScreenRect box = warehousesim::view::metricsOverlayRect(figures, rig.controller);
+  const auto fit = static_cast<std::size_t>((box.width - 12.0) / 4.0);
+  EXPECT_EQ(found.size(), fit);
+  EXPECT_LT(fit, windows.size());
+  EXPECT_NEAR(found.back().height, 36.0, 1e-9);  // the last bar is the newest window
+  for (const ScreenRect& bar : found) {
+    EXPECT_LE(bar.right(), box.right());
+  }
+}
+
+TEST(FleetDashboardTest, WithoutAnyWindowYetTheChartSaysSoInsteadOfShowingAnEmptyAxis) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured();
+  const DrawList list = rig.sceneWith(&figures);
+  EXPECT_TRUE(bars(list).empty());
+  EXPECT_TRUE(findText(list, "no window complete yet") != nullptr);
+  const auto some = measured({1});
+  EXPECT_TRUE(findText(rig.sceneWith(&some), "tasks done per 100-tick window (latest 1)") !=
+              nullptr);
+}
+
+TEST(FleetDashboardTest, InAWindowTooSmallForItItSaysSoOnOneLineAndDrawsNothingElse) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  rig.controller.resize(ScreenSize{720, 400});
+  rig.frame({});
+  const auto figures = measured({1, 2});
+  const DrawList list = rig.sceneWith(&figures);
+  EXPECT_TRUE(findText(list, "window too small") != nullptr);
+  EXPECT_TRUE(findText(list, "FLEET METRICS") == nullptr);
+  EXPECT_TRUE(bars(list).empty());
+}
+
+TEST(FleetDashboardTest, InAWindowSmallerStillItDrawsNothingAtAllAndNothingBreaks) {
+  FleetController c(ScreenSize{300, 200}, hall());
+  Snapshot s = world();
+  InputEvents toggle;
+  toggle.fleetKeys.push_back(FleetKey::ToggleMetrics);
+  (void)c.apply(toggle, 0.016, s, 0);
+  const auto figures = measured({1, 2});
+  const DrawList list = buildFleetScene(hall(), s, c, &figures);
+  EXPECT_TRUE(findText(list, "FLEET METRICS") == nullptr);
+  for (const auto& command : list.commands) {
+    if (const auto* line = std::get_if<Line>(&command)) {
+      EXPECT_TRUE(std::isfinite(line->from.x) && std::isfinite(line->to.y));
+    }
+  }
+}
+
+TEST(FleetDashboardTest, TheSceneWithTheDashboardIsStillAPureFunctionOfTheState) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured({1, 2, 3});
+  EXPECT_TRUE(rig.sceneWith(&figures).commands == rig.sceneWith(&figures).commands);
+}
+
+TEST(FleetDashboardTest, SwitchingItOffGivesBackExactlyTheSceneWithoutIt) {
+  Rig rig;
+  const DrawList plain = rig.scene();
+  rig.key(FleetKey::ToggleMetrics);
+  rig.key(FleetKey::ToggleMetrics);
+  const auto figures = measured({1, 2, 3});
+  EXPECT_TRUE(rig.sceneWith(&figures).commands == plain.commands);
 }
 
 // ---- telling the things apart -------------------------------------------------------------------

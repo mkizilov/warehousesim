@@ -11,11 +11,13 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
 
 #include "arguments.hpp"
+#include "metrics_output.hpp"
 #include "simulation_source.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/rendering/sdl_window.hpp"
@@ -33,8 +35,10 @@ constexpr std::uint64_t kMaxFps = 1000;
 
 void printUsage(std::ostream& out) {
   out << "usage: warehousesim_gui [--seed N] [--layout NAME | --map FILE] [--tick-ms N]\n"
-         "                        [--speed X] [--fps N] [--frames N]\n"
+         "                        [--speed X] [--fps N] [--frames N] [--metrics-csv BASE]\n"
          "  --map FILE   run a map made with warehousesim_editor instead of a layout\n"
+         "  --metrics-csv BASE  where the E key writes the (simulated) performance figures:\n"
+         "               BASE.runs.csv, BASE.robots.csv and BASE.series.csv\n"
          "  --tick-ms N  fixed simulation step, in real milliseconds at speed 1 (default 100)\n"
          "  --speed X    initial playback speed multiplier, 0.0625 to 64 (default 1)\n"
          "  --fps N      frame rate cap, 1 to 1000 (default 60)\n"
@@ -52,9 +56,11 @@ int main(int argc, char** argv) {
   std::uint64_t maxFrames = 0;
   double speed = 1.0;
   warehousesim::apps::WarehouseSource source;
+  std::string metricsBase;
   bool failed = false;
   for (int i = 1; i < argc && !failed; ++i) {
-    if (warehousesim::apps::readUnsignedOption(argc, argv, i, "--seed", seed, failed) ||
+    if (warehousesim::apps::readStringOption(argc, argv, i, "--metrics-csv", metricsBase, failed) ||
+        warehousesim::apps::readUnsignedOption(argc, argv, i, "--seed", seed, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--tick-ms", tickMs, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--fps", fps, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--frames", maxFrames, failed) ||
@@ -72,6 +78,9 @@ int main(int argc, char** argv) {
     printUsage(std::cerr);
     return 2;
   }
+  if (!metricsBase.empty() && !warehousesim::apps::metricsBaseUsable(metricsBase, std::cerr)) {
+    return 2;
+  }
 
   try {
     auto made = warehousesim::apps::makeScenario(source, std::cerr);
@@ -85,8 +94,10 @@ int main(int argc, char** argv) {
 
     // Declaration order matters for shutdown: the window (and SDL) is torn down before the
     // runner, and the runner's destructor joins its thread even if we leave through an exception.
+    warehousesim::simulation::Simulation first = (*made.scenario)(seed);
+    const warehousesim::core::Tick spawnInterval = first.config().taskSpawnInterval;
     warehousesim::simulation::SimulationRunner runner(
-        (*made.scenario)(seed),
+        std::move(first),
         std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)),
         *made.scenario);
     warehousesim::rendering::SdlWindow window("WarehouseSim fleet", 1280, 720);
@@ -96,7 +107,12 @@ int main(int argc, char** argv) {
 
     const auto frameBudget = std::chrono::duration_cast<Clock::duration>(
         std::chrono::duration<double>(1.0 / static_cast<double>(fps)));
-    warehousesim::view::FleetSession session(runner, controller);
+    std::optional<warehousesim::view::FleetSession::MetricsExport> exportTo;
+    if (!metricsBase.empty()) {
+      exportTo = warehousesim::view::FleetSession::MetricsExport{
+          metricsBase, {warehousesim::apps::warehouseLabel(source), seed, spawnInterval}};
+    }
+    warehousesim::view::FleetSession session(runner, controller, std::move(exportTo));
     auto previousFrame = Clock::now();
     std::uint64_t frames = 0;
     while (maxFrames == 0 || frames < maxFrames) {
@@ -113,7 +129,9 @@ int main(int argc, char** argv) {
         break;
       }
 
-      window.draw(warehousesim::view::buildFleetScene(runner.warehouse(), drawn, controller));
+      window.draw(
+          warehousesim::view::buildFleetScene(runner.warehouse(), drawn, controller,
+                                              session.metrics() ? &*session.metrics() : nullptr));
       ++frames;
       std::this_thread::sleep_until(frameStart + frameBudget);
     }

@@ -31,14 +31,15 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `planning`   | `PathPlanner` interface, A* with options, results, reused workspace; space-time A* (`SpaceTimeAStar`) behind a `SpaceTimeConstraints` interface | core, world |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
-| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios | all of the above, nlohmann_json |
+| `metrics`    | simulated performance figures: `MetricsAccumulator` (plain observations in), `FleetMetrics` (counts and derived rates), CSV and dashboard text | core only |
+| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps | all of the above, metrics, nlohmann_json |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing | core, world, nlohmann_json (private) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize), `editor_files` (save/load/predefined) | core, world, mapio (private) |
 | `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `FleetController`, `FleetSession`, `EditorController`); no SDL | core, world, simulation, editor |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
-`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`.
+`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning and fleet benchmarks.
 
 ### Clean architecture
 
@@ -165,6 +166,27 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   the simulation's random number generators (`TaskCommandsDoNotDisturbTheRandomTaskStream`). The state at any
   tick must stay a function of the scenario, the seed and the command log (`RunnerDeterminismTest`,
   `FleetDeterminismTest`); a change that breaks replay is a bug, not a flaky test.
+- Performance figures are simulated figures, and say so. `metrics` knows nothing of the simulation: it
+  sees `TickObservation`s (plain data) and `simulation::MetricsCollector` is the one place that reads a
+  `Simulation` to make them, through its public const interface. Measuring must never change a run
+  (`AMeasuredRunIsTheSameRunStepForStepAsAnUnmeasuredOne`); a metric must never read a clock, call the
+  planner or draw a random number. Every robot is in exactly one `Activity` per tick (the budget adds up,
+  `checkRuns` and the tests assert it), a figure with a zero denominator is undefined (empty CSV field,
+  `n/a`, never 0 or NaN), and a new figure needs a definition in the README table, a CSV column (the runs
+  header is pinned by `RunsCsvTest.TheColumnsAreAContractAndAppearInThisOrder`: change it on purpose and
+  update the README), a hand-checked test and a mutation check. Every output says `simulated`
+  (`basis` column, dashboard title and disclaimer); do not describe a figure as a property of a real robot,
+  warehouse or controller, in code, docs or reports. Waiting time comes from `Simulation::heldBack()` (the
+  engine refusing a robot its next cell this step), never from a robot's own blocked-tick counter, which
+  restarts whenever it tries to resolve a block. Counters read by the collector must be running totals that
+  never go down (`TheTrafficCountsKeepCountingWhenTheLayoutIsEdited`); the accumulator refuses a gap or a
+  count that falls rather than guess.
+- The benchmark is deterministic and checks itself: `warehousesim_fleet_bench` fails on a collision, an
+  unaccounted task or robot-tick, or a first case that does not reproduce. Fleet size is chosen through
+  `ScenarioOptions` (unset must stay exactly the legacy fleet: `NoOptionsIsExactlyTheScenarioAsItAlwaysWas`),
+  and the task stream depends on the seed alone so that fleets are offered the same work. When the baseline
+  table in the README is regenerated, regenerate all of it with the same command and say what it was
+  built with; never edit a number by hand.
 - Everything the editor decides is in `editor` (the model) and `view::EditorController` (input to edits):
   both are tested without a display, with plain `InputEvents`. `rendering` only translates SDL events into
   `PointerAction`s and `EditorCommand`s, in the order they happened, and must not decide anything. Anything
@@ -219,6 +241,8 @@ ctest --preset default
 build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
 build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # fleet interface smoke test, no window
+build/release/bench/warehousesim_fleet_bench                              # the baseline table of the README
+build/default/apps/warehousesim_cli --layout compact --ticks 500 --metrics --metrics-csv build/m   # dashboard + CSV
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-map.json --layout compact --frames 30
 # (ctest also runs the headless CLI on every layout and on a map file, checks that equal seeds give
 # equal output, and that invalid maps are refused)

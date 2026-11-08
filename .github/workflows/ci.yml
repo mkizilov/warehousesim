@@ -60,6 +60,15 @@ jobs:
       - name: Planning benchmark (informational; also cross-checks A* against BFS)
         if: matrix.preset == 'release'
         run: build/release/bench/warehousesim_planning_bench --max-size 256
+      - name: Fleet benchmark (simulated figures; fails on a collision or an unaccounted task)
+        if: matrix.preset == 'release'
+        run: build/release/bench/warehousesim_fleet_bench
+      - name: Metrics dashboard text and CSV export (headless)
+        run: |
+          build/${{ matrix.preset }}/apps/warehousesim_cli --layout compact --ticks 300 --seed 1 \
+            --metrics --metrics-csv build/ci-metrics > /dev/null 2> build/ci-metrics.txt
+          grep -q 'Simulated results. Not a claim about real robots.' build/ci-metrics.txt
+          test -s build/ci-metrics.runs.csv
       - name: Headless CLI smoke run (every predefined layout)
         run: |
           for layout in demo compact fulfilment; do

@@ -2,7 +2,8 @@
 #   core <- world <- planning
 #   core <- robots <- tasks
 #   {world, robots} <- traffic (space-time reservations)
-#   {world, planning, robots, tasks, traffic} <- simulation
+#   core <- metrics (aggregation and export of simulated figures from plain observations)
+#   {world, planning, robots, tasks, traffic, metrics} <- simulation
 #   world <- mapio (versioned JSON map file) <- editor (editing model)
 #   {simulation, editor} <- view (camera, scenes, controllers; no SDL)
 #   view <- rendering (SDL3 window; GUI only)
@@ -14,6 +15,7 @@ add_subdirectory(robots)
 add_subdirectory(planning)
 add_subdirectory(tasks)
 add_subdirectory(traffic)
+add_subdirectory(metrics)
 add_subdirectory(simulation)
 add_subdirectory(view)
 

@@ -101,6 +101,7 @@ struct PlanningStats {
   std::uint64_t work = 0;             // cooperative search work in total
   std::uint64_t peakStepWork = 0;     // most planning work, of any kind, in one step
   std::uint64_t obstacleRepairs = 0;  // routes repaired after the layout changed
+  std::uint64_t repaths = 0;          // routes recomputed to get round a robot that blocks the way
   std::uint64_t prolongedBlocks = 0;  // robots stuck for prolongedBlockTicks
   std::uint64_t deadlocks = 0;        // rings of robots waiting for each other, each counted once
   std::uint64_t deadlocksRecovered = 0;   // ... that a robot was moved aside for
@@ -251,9 +252,19 @@ class Simulation {
   [[nodiscard]] const traffic::ReservationTable& reservations() const noexcept {
     return traffic_.table();
   }
-  [[nodiscard]] const traffic::TrafficStats& trafficStats() const noexcept {
-    return traffic_.stats();
+  // Running totals since the simulation was built: they keep counting through a change of the
+  // layout (placeObstacle, clearObstacle), which gives the controller a new table.
+  [[nodiscard]] traffic::TrafficStats trafficStats() const noexcept {
+    traffic::TrafficStats total = trafficCarried_;
+    total += traffic_.stats();
+    return total;
   }
+  // Set, with the cell it wanted and why not, if in the step just run the robot wanted to drive
+  // into its next cell and was not given it, whether by the reservation table or because another
+  // robot holds the cell. Unlike RobotSnapshot::waiting (which follows the robot's own count of
+  // ticks blocked, and starts over when it tries to resolve the block) this is exactly one answer
+  // per step. Throws std::out_of_range for an unknown id.
+  [[nodiscard]] std::optional<RobotWait> heldBack(core::RobotId id) const;
   [[nodiscard]] std::uint64_t replans() const noexcept { return replans_; }
   [[nodiscard]] const PlanningStats& planningStats() const noexcept { return planningStats_; }
   // What the table decided for a robot in the step just run.
@@ -318,6 +329,8 @@ class Simulation {
   std::vector<traffic::TrafficPlan> plans_;  // by robot, from the step just run
   std::vector<bool> displaced_;              // by robot: moved aside during the current step
   std::vector<bool> movedThisStep_;          // by robot: changed cell or was driving this step
+  std::vector<bool> heldBack_;               // by robot: refused its next cell this step
+  traffic::TrafficStats trafficCarried_;     // counted by controllers replaced since the start
   std::uint64_t replans_ = 0;
   traffic::CooperativeRouter router_;
   traffic::ProgressMonitor progress_{0};

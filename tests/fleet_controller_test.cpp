@@ -530,6 +530,37 @@ TEST(FleetControllerTest, TheInitialSpeedIsTheOneGiven) {
   EXPECT_DOUBLE_EQ(c.speed(), 4.0);
 }
 
+TEST(FleetControllerTest, TheMetricsDashboardStartsOffAndMTogglesItWithoutPostingAnything) {
+  Rig rig;
+  EXPECT_FALSE(rig.controller.showMetrics());
+  FleetOutput out = rig.key(FleetKey::ToggleMetrics);
+  EXPECT_TRUE(out.commands.empty());
+  EXPECT_FALSE(out.paused.has_value());
+  EXPECT_FALSE(out.speed.has_value());
+  EXPECT_FALSE(out.exportMetrics);
+  EXPECT_TRUE(rig.controller.showMetrics());
+  rig.key(FleetKey::ToggleMetrics);
+  EXPECT_FALSE(rig.controller.showMetrics());
+}
+
+TEST(FleetControllerTest, EAsksForAnExportAndForNothingElse) {
+  Rig rig;
+  const FleetOutput out = rig.key(FleetKey::ExportMetrics);
+  EXPECT_TRUE(out.exportMetrics);
+  EXPECT_TRUE(out.commands.empty());  // an export is not a command: it changes nothing
+  EXPECT_FALSE(out.paused.has_value());
+  EXPECT_FALSE(rig.controller.showMetrics());
+  EXPECT_FALSE(rig.frame({}).exportMetrics);  // and it is asked for once, not every frame
+}
+
+TEST(FleetControllerTest, TheDashboardSurvivesARestartOfTheScenario) {
+  Rig rig;
+  rig.key(FleetKey::ToggleMetrics);
+  rig.epoch = 1;
+  (void)rig.frame({});
+  EXPECT_TRUE(rig.controller.showMetrics());
+}
+
 TEST(FleetControllerTest, TheOverlaysToggleAndStartOn) {
   Rig rig;
   EXPECT_TRUE(rig.controller.showPaths());
@@ -827,7 +858,7 @@ TEST(FleetControllerPropertyTest, RandomInputOnlyEverPostsCommandsThatAreValidOn
     for (int step = 0; step < 500; ++step) {
       InputEvents input;
       for (std::uint64_t i = rng.below(3); i > 0; --i) {
-        input.fleetKeys.push_back(static_cast<FleetKey>(rng.below(11)));
+        input.fleetKeys.push_back(static_cast<FleetKey>(rng.below(13)));
       }
       for (std::uint64_t i = rng.below(5); i > 0; --i) {
         const ScreenPoint at{static_cast<double>(rng.below(1400)) - 60.0,
@@ -891,9 +922,10 @@ TEST(FleetControllerPropertyTest, InputThatNeverAsksForACommandNeverPostsOne) {
     InputEvents input;
     // No N, no priority keys, no R: only looking around and selecting.
     for (std::uint64_t i = rng.below(3); i > 0; --i) {
-      const FleetKey looking[] = {FleetKey::NextRobot, FleetKey::PreviousRobot, FleetKey::NextTask,
-                                  FleetKey::PreviousTask};
-      input.fleetKeys.push_back(looking[rng.below(4)]);
+      const FleetKey looking[] = {FleetKey::NextRobot,     FleetKey::PreviousRobot,
+                                  FleetKey::NextTask,      FleetKey::PreviousTask,
+                                  FleetKey::ToggleMetrics, FleetKey::ExportMetrics};
+      input.fleetKeys.push_back(looking[rng.below(6)]);
     }
     const ScreenPoint at{static_cast<double>(rng.below(1400)), static_cast<double>(rng.below(800))};
     input.pointerActions = {{Kind::Press, PointerButton::Primary, at},

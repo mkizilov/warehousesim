@@ -1,11 +1,15 @@
 #include "warehousesim/view/fleet_scene.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include "warehousesim/core/point.hpp"
+#include "warehousesim/metrics/export.hpp"
 #include "warehousesim/robots/robot_state.hpp"
 #include "warehousesim/view/scene.hpp"
 #include "warehousesim/view/scene_parts.hpp"
@@ -140,6 +144,89 @@ void addEntryOverlay(DrawList& list, const FleetController& controller) {
   }
 }
 
+// ---- the performance dashboard ------------------------------------------------------------------
+
+constexpr Color kMetricsBacking{12, 14, 20};
+constexpr Color kMetricsBar{110, 200, 120};
+constexpr Color kMetricsAxis{90, 96, 112};
+
+ScreenPoint metricsOrigin(const FleetController& controller) {
+  return {leftRulerWidth(controller.camera().grid()) + 8.0, kRulerThickness + 8.0};
+}
+
+// What the overlay is: the dashboard text, then a chart line and the bars.
+struct MetricsBox {
+  std::vector<std::string> lines;
+  double width = 0.0;
+  double height = 0.0;
+};
+
+MetricsBox metricsBox(const metrics::FleetMetrics& metrics) {
+  MetricsBox box;
+  box.lines = metrics::dashboardLines(metrics);
+  box.width = static_cast<double>(metrics::kDashboardColumns) * kGlyphSize + 2.0 * kMetricsPadding;
+  box.height = static_cast<double>(box.lines.size() + 1) * kPanelLineHeight + kMetricsChartHeight +
+               2.0 * kMetricsPadding;
+  return box;
+}
+
+void addMetricsOverlay(DrawList& list, const FleetController& controller,
+                       const metrics::FleetMetrics& metrics) {
+  const MetricsBox box = metricsBox(metrics);
+  const ScreenPoint origin = metricsOrigin(controller);
+  const ScreenSize canvas = controller.layout().canvas;
+  const double bottom = static_cast<double>(canvas.height) - kStatusBarHeight;
+  if (origin.x + box.width > static_cast<double>(canvas.width) || origin.y + box.height > bottom) {
+    constexpr std::string_view kNotice = "metrics: window too small (M closes)";
+    const double width = static_cast<double>(kNotice.size()) * kGlyphSize + 2.0 * kMetricsPadding;
+    if (origin.x + width <= static_cast<double>(canvas.width) &&
+        origin.y + kPanelLineHeight + 2.0 * kMetricsPadding <= bottom) {
+      list.commands.emplace_back(FillRect{
+          {origin.x, origin.y, width, kPanelLineHeight + 2.0 * kMetricsPadding}, kMetricsBacking});
+      put(list, origin.x + kMetricsPadding, origin.y + kMetricsPadding, std::string(kNotice),
+          kPanelText);
+    }
+    return;
+  }
+  list.commands.emplace_back(
+      FillRect{{origin.x, origin.y, box.width, box.height}, kMetricsBacking});
+  double y = origin.y + kMetricsPadding;
+  const double x = origin.x + kMetricsPadding;
+  for (std::size_t i = 0; i < box.lines.size(); ++i) {
+    const bool title = i == 0;
+    const bool disclaimer = i + 1 == box.lines.size();
+    put(list, x, y, box.lines[i], title ? kHeader : (disclaimer ? kError : kPanelText));
+    y += kPanelLineHeight;
+  }
+
+  // One bar per sampling window: tasks completed in it.
+  const auto& samples = metrics.samples;
+  put(list, x, y,
+      samples.empty() ? std::string("tasks done per window: no window complete yet")
+                      : "tasks done per " + std::to_string(samples.back().windowTicks) +
+                            "-tick window (latest " + std::to_string(samples.size()) + ")",
+      kPanelText);
+  y += kPanelLineHeight;
+  const double baseline = y + kMetricsChartHeight;
+  list.commands.emplace_back(
+      Line{{x, baseline}, {x + box.width - 2.0 * kMetricsPadding, baseline}, kMetricsAxis});
+  std::uint64_t most = 1;
+  for (const metrics::MetricsSample& sample : samples) {
+    most = std::max(most, sample.tasksCompleted);
+  }
+  const auto fit = static_cast<std::size_t>((box.width - 2.0 * kMetricsPadding) / kMetricsBarStep);
+  const std::size_t first = samples.size() > fit ? samples.size() - fit : 0;
+  for (std::size_t i = first; i < samples.size(); ++i) {
+    const double height = kMetricsChartHeight * static_cast<double>(samples[i].tasksCompleted) /
+                          static_cast<double>(most);
+    if (height > 0.0) {
+      list.commands.emplace_back(FillRect{{x + static_cast<double>(i - first) * kMetricsBarStep,
+                                           baseline - height, kMetricsBarWidth, height},
+                                          kMetricsBar});
+    }
+  }
+}
+
 void addLegend(DrawList& list, const FleetLayout& layout) {
   const double x = layout.panel.x + kPanelPadding;
   const double firstY = layout.legendY;
@@ -226,10 +313,10 @@ void addPanel(DrawList& list, const simulation::Snapshot& drawn,
 }  // namespace
 
 std::array<std::string, kHelpLines> helpLines() {
-  return {"Click a robot or row, Tab, T: select", "N, pickup, dropoff clicks: new task",
-          "1-4: priority of new / selected task", "Space pause   [ ] speed   R restart",
-          "P routes   O held cells   0 fit view", "Wheel +/- zoom; right drag, WASD: pan",
-          "Esc: cancel, clear selection, quit"};
+  return {"Click a robot or row, Tab, T: select",  "N, pickup, dropoff clicks: new task",
+          "1-4: priority of new / selected task",  "Space pause   [ ] speed   R restart",
+          "P routes   O held cells   0 fit view",  "M metrics dashboard   E export CSV",
+          "Wheel +/- zoom; right drag, WASD: pan", "Esc: cancel, clear selection, quit"};
 }
 
 std::string robotRowText(const RobotSnapshot& robot) {
@@ -365,8 +452,15 @@ std::array<std::string, kPromptLines> promptLines(const FleetController& control
   return lines;
 }
 
+ScreenRect metricsOverlayRect(const metrics::FleetMetrics& metrics,
+                              const FleetController& controller) {
+  const MetricsBox box = metricsBox(metrics);
+  const ScreenPoint origin = metricsOrigin(controller);
+  return {origin.x, origin.y, box.width, box.height};
+}
+
 DrawList buildFleetScene(const world::Warehouse& warehouse, const simulation::Snapshot& drawn,
-                         const FleetController& controller) {
+                         const FleetController& controller, const metrics::FleetMetrics* metrics) {
   ViewStatus status{controller.paused(),
                     controller.speed(),
                     controller.pointer(),
@@ -379,6 +473,9 @@ DrawList buildFleetScene(const world::Warehouse& warehouse, const simulation::Sn
                     "P routes  Esc cancel"};
   DrawList list = buildScene(warehouse, drawn, controller.camera(), status);
   addEntryOverlay(list, controller);
+  if (metrics != nullptr && controller.showMetrics()) {
+    addMetricsOverlay(list, controller, *metrics);
+  }
   addPanel(list, drawn, controller);
   return list;
 }

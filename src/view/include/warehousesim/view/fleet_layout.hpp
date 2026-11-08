@@ -26,7 +26,7 @@ inline constexpr std::size_t kMaxRobotRows = 8;
 inline constexpr std::size_t kInspectorLines = 10;
 inline constexpr std::size_t kPromptLines = 2;
 inline constexpr std::size_t kLegendLines = 2;
-inline constexpr std::size_t kHelpLines = 7;
+inline constexpr std::size_t kHelpLines = 8;
 
 struct FleetCounts {
   std::size_t robots = 0;

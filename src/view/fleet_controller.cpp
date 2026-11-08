@@ -209,6 +209,12 @@ void FleetController::handleKey(FleetKey key, FleetOutput& out) {
       out.commands.push_back(simulation::ResetScenario{});
       setMessage("restarting the scenario", false);
       break;
+    case FleetKey::ToggleMetrics:
+      showMetrics_ = !showMetrics_;
+      break;
+    case FleetKey::ExportMetrics:
+      out.exportMetrics = true;
+      break;
     case FleetKey::Cancel:
       if (entry_ != TaskEntry::None) {
         entry_ = TaskEntry::None;
