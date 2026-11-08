@@ -98,12 +98,18 @@ warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
     collision_avoidance_test.cpp
+    commands_test.cpp
     cooperative_planning_test.cpp
     editor_controller_test.cpp
     editor_scene_test.cpp
+    fleet_controller_test.cpp
+    fleet_layout_test.cpp
+    fleet_scene_test.cpp
+    fleet_session_test.cpp
     interpolation_test.cpp
     map_simulation_test.cpp
     movement_test.cpp
+    runner_commands_test.cpp
     runner_test.cpp
     scene_test.cpp
     simulation_dispatch_test.cpp

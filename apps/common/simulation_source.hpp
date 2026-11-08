@@ -22,20 +22,20 @@ struct WarehouseSource {
   [[nodiscard]] bool conflicting() const noexcept { return !layout.empty() && !mapFile.empty(); }
 };
 
-struct SourceResult {
-  std::optional<simulation::Simulation> simulation;
+struct ScenarioResult {
+  std::optional<simulation::ScenarioFactory> scenario;
   bool unknownLayout = false;  // the caller shows its usage text and exits with 2
 };
 
-// Builds the simulation. A map file that is missing, invalid or unable to host a simulation is
-// reported on `err` (with every problem found in it) and gives an empty result.
-[[nodiscard]] inline SourceResult makeSimulation(const WarehouseSource& source, std::uint64_t seed,
-                                                 std::ostream& err) {
+// The scenario to run: a function from a seed to a fresh simulation of the chosen warehouse. A map
+// file that is missing, invalid or unable to host a simulation is reported on `err` (with every
+// problem found in it) and gives an empty result.
+[[nodiscard]] inline ScenarioResult makeScenario(const WarehouseSource& source, std::ostream& err) {
   if (source.mapFile.empty()) {
-    auto simulation = simulation::makeLayoutSimulation(
-        source.layout.empty() ? std::string_view("demo") : std::string_view(source.layout), seed);
-    const bool unknown = !simulation.has_value();
-    return {std::move(simulation), unknown};
+    auto scenario = simulation::layoutScenario(
+        source.layout.empty() ? std::string_view("demo") : std::string_view(source.layout));
+    const bool unknown = !scenario.has_value();
+    return {std::move(scenario), unknown};
   }
   const mapio::MapLoad load = mapio::loadMapFile(source.mapFile);
   if (!load.ok()) {
@@ -43,11 +43,26 @@ struct SourceResult {
     return {};
   }
   try {
-    return {simulation::makeMapSimulation(load.document->layout, seed), false};
+    return {simulation::mapScenario(load.document->layout), false};
   } catch (const std::invalid_argument& error) {
     err << "error: " << source.mapFile << ": " << error.what() << '\n';
     return {};
   }
+}
+
+struct SourceResult {
+  std::optional<simulation::Simulation> simulation;
+  bool unknownLayout = false;
+};
+
+// Builds the simulation of makeScenario's scenario for one seed.
+[[nodiscard]] inline SourceResult makeSimulation(const WarehouseSource& source, std::uint64_t seed,
+                                                 std::ostream& err) {
+  ScenarioResult made = makeScenario(source, err);
+  if (!made.scenario) {
+    return {std::nullopt, made.unknownLayout};
+  }
+  return {(*made.scenario)(seed), false};
 }
 
 }  // namespace warehousesim::apps

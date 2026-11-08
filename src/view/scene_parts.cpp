@@ -92,6 +92,19 @@ void addOutline(DrawList& list, const ScreenRect& cell, Color color) {
   list.commands.emplace_back(Line{bottomLeft, topLeft, color});
 }
 
+void addDiamond(DrawList& list, const ScreenRect& r, Color color) {
+  const double middleX = r.x + r.width / 2.0;
+  const double middleY = r.y + r.height / 2.0;
+  const ScreenPoint top{middleX, r.y};
+  const ScreenPoint right{r.right(), middleY};
+  const ScreenPoint bottom{middleX, r.bottom()};
+  const ScreenPoint left{r.x, middleY};
+  list.commands.emplace_back(Line{top, right, color});
+  list.commands.emplace_back(Line{right, bottom, color});
+  list.commands.emplace_back(Line{bottom, left, color});
+  list.commands.emplace_back(Line{left, top, color});
+}
+
 double leftRulerWidth(world::GridSize grid) {
   return digitCount(grid.height() - 1) * kGlyphSize + 6.0;
 }

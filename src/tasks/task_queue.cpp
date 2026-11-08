@@ -111,4 +111,17 @@ bool TaskQueue::cancel(core::TaskId id) {
   return true;
 }
 
+bool TaskQueue::setPriority(core::TaskId id, TaskPriority priority) {
+  Task& task = mutableTask(id);
+  if (task.status != TaskStatus::Pending) {
+    return false;
+  }
+  if (task.priority != priority) {
+    pending_.erase({task.priority, task.createdAt, task.id});
+    task.priority = priority;
+    pending_.insert({priority, task.createdAt, task.id});
+  }
+  return true;
+}
+
 }  // namespace warehousesim::tasks

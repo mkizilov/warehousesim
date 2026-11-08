@@ -5,6 +5,7 @@
 
 #include "warehousesim/view/camera.hpp"
 #include "warehousesim/view/editor_input.hpp"
+#include "warehousesim/view/fleet_input.hpp"
 #include "warehousesim/world/grid_size.hpp"
 
 namespace warehousesim::view {
@@ -27,9 +28,11 @@ struct InputEvents {
   double panY = 0.0;
   std::optional<ScreenPoint> pointer;  // latest pointer position inside the window
   bool pointerLeft = false;            // the pointer left the window
-  // Used by the map editor, in the order they happened; the simulation view ignores them.
+  // Used by the map editor and the fleet interface, in the order they happened; the plain view
+  // ignores them. The fleet interface reads clicks as primary-button presses and releases.
   std::vector<PointerAction> pointerActions;
   std::vector<EditorCommand> commands;
+  std::vector<FleetKey> fleetKeys;
 };
 
 // Owns the camera plus the pause, playback-speed and overlay state that the UI controls. Both

@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 
+#include "warehousesim/core/ids.hpp"
 #include "warehousesim/robots/robot_state.hpp"
 #include "warehousesim/simulation/simulation.hpp"
 #include "warehousesim/view/camera.hpp"
@@ -21,6 +22,16 @@ struct ViewStatus {
   // cells robots hold, outlined in the robot's colour.
   bool showPaths = false;
   bool showOccupied = false;
+  // For the fleet interface; all off by default. The robot and the task being inspected are drawn
+  // with extra emphasis: the robot in a white frame with its route three lines thick (shown even
+  // when routes are off), the task's pickup and dropoff in white doubled diamonds. With
+  // `destinationRings` every open task gets a diamond round its pickup (until collected) and its
+  // dropoff, the one shape that neither robots, walls nor shelves have.
+  std::optional<core::RobotId> selectedRobot;
+  std::optional<core::TaskId> selectedTask;
+  bool destinationRings = false;
+  // The second line of the status bar; the plain view's key help if empty.
+  std::string keyHelp;
 };
 
 // Thickness of the coordinate rulers along the top and left edges and of the status bar at the

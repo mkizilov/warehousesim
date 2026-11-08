@@ -167,12 +167,19 @@ struct RobotSnapshot {
   bool operator==(const RobotSnapshot&) const = default;
 };
 
+// How many finished tasks a Snapshot keeps for display.
+inline constexpr std::size_t kRecentTaskCount = 12;
+
 // Value copy of the simulation state, safe to hand to another thread. Terminal
-// tasks are reduced to counters so the size stays bounded on long runs.
+// tasks are reduced to counters (and the last few, for display) so the size stays bounded on long
+// runs.
 struct Snapshot {
   core::Tick tick = 0;
   std::vector<RobotSnapshot> robots;
   std::vector<tasks::Task> activeTasks;
+  // The finished tasks (completed, failed, cancelled) that were submitted last, newest first, at
+  // most kRecentTaskCount. For views; the JSON report keeps to the counters below.
+  std::vector<tasks::Task> recentTasks;
   std::size_t completedTasks = 0;
   std::size_t failedTasks = 0;
   std::size_t cancelledTasks = 0;
@@ -207,6 +214,10 @@ class Simulation {
   // but not yet available. Returns false if the task had already completed, failed or been
   // cancelled; throws std::out_of_range for an unknown id.
   bool cancelTask(core::TaskId id);
+  // Changes the priority of a task that is still waiting for a robot, which changes where it stands
+  // in the dispatch order. False, changing nothing, for a task that is no longer waiting; throws
+  // std::out_of_range for an unknown id.
+  bool setTaskPriority(core::TaskId id, tasks::TaskPriority priority);
 
   // Operator controls. Disabling takes a robot out of service (state Unavailable): a task it
   // had not collected yet goes back to Pending, a task it was carrying fails. Restoring returns
@@ -230,6 +241,7 @@ class Simulation {
   void run(core::Tick ticks);
 
   [[nodiscard]] core::Tick tick() const noexcept { return clock_.tick(); }
+  [[nodiscard]] const SimulationConfig& config() const noexcept { return config_; }
   [[nodiscard]] const world::World& world() const noexcept { return world_; }
   [[nodiscard]] const world::Warehouse& warehouse() const noexcept { return world_.layout(); }
   [[nodiscard]] const std::vector<robots::Robot>& robots() const noexcept { return robots_; }

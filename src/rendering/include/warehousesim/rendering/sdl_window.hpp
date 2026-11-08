@@ -10,10 +10,12 @@
 
 namespace warehousesim::rendering {
 
-// Which program is reading the input. The simulation view pans with a drag of any mouse button and
-// ignores clicks and editing keys; the map editor paints with the left and right buttons, pans with
-// the middle one, and turns its keys into commands (see view::EditorController).
-enum class PollMode : std::uint8_t { Simulation, Editor };
+// Which program is reading the input. The fleet interface pans with a drag of the middle or right
+// mouse button, reads a click of the left button as a click, and turns its keys into
+// view::FleetKeys (Escape is one of them, so only closing the window quits by itself); the map
+// editor paints with the left and right buttons, pans with the middle one, and turns its keys into
+// view::EditorCommands.
+enum class PollMode : std::uint8_t { Fleet, Editor };
 
 // RAII wrapper for an SDL3 window and renderer. SDL types stay out of this header, and
 // everything is released in reverse order of creation (renderer, window, then SDL itself),
@@ -31,8 +33,8 @@ class SdlWindow {
   SdlWindow& operator=(SdlWindow&&) = delete;
 
   // Drains the SDL event queue and returns what the user did, in render-pixel coordinates.
-  // Closing the window or pressing Escape sets `quit`.
-  [[nodiscard]] view::InputEvents pollEvents(PollMode mode = PollMode::Simulation);
+  // Closing the window sets `quit`, and so does Escape in the map editor.
+  [[nodiscard]] view::InputEvents pollEvents(PollMode mode);
 
   // Current drawable size in render pixels; changes when the window is resized.
   [[nodiscard]] view::ScreenSize renderSize() const;

@@ -1,9 +1,12 @@
-// Graphical runner. The simulation steps on a worker thread with a fixed timestep; this thread
-// reads input, draws frames and paces itself to --fps. Frame rate never affects the simulation,
-// only how finely the motion between two steps is drawn.
+// Graphical fleet interface. The simulation steps on a worker thread with a fixed timestep; this
+// thread reads input, draws frames and paces itself to --fps. The interface never touches the
+// simulation: everything it wants done to it (new tasks, priority changes, a restart) goes through
+// SimulationRunner::post() as a command that the worker applies between two steps and records.
 //
-//   Space pause/resume   [ ] slower/faster   wheel or +/- zoom   drag or arrows/WASD pan
-//   0 fit the whole warehouse   Esc quit
+//   click / Tab / T  select a robot or a task    N, click, click  add a delivery task
+//   1-4  priority of the new or the selected task   Space  pause   [ ] slower / faster   R  restart
+//   P / O  routes / held cells   wheel +/- zoom   middle or right drag, arrows, WASD pan   0  fit
+//   Esc  cancel, clear the selection, quit
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -17,9 +20,9 @@
 #include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/rendering/sdl_window.hpp"
 #include "warehousesim/simulation/runner.hpp"
-#include "warehousesim/view/interpolation.hpp"
-#include "warehousesim/view/scene.hpp"
-#include "warehousesim/view/view_controller.hpp"
+#include "warehousesim/view/fleet_controller.hpp"
+#include "warehousesim/view/fleet_scene.hpp"
+#include "warehousesim/view/fleet_session.hpp"
 
 namespace {
 
@@ -71,8 +74,8 @@ int main(int argc, char** argv) {
   }
 
   try {
-    auto made = warehousesim::apps::makeSimulation(source, seed, std::cerr);
-    if (!made.simulation) {
+    auto made = warehousesim::apps::makeScenario(source, std::cerr);
+    if (!made.scenario) {
       if (made.unknownLayout) {
         printUsage(std::cerr);
         return 2;
@@ -83,16 +86,17 @@ int main(int argc, char** argv) {
     // Declaration order matters for shutdown: the window (and SDL) is torn down before the
     // runner, and the runner's destructor joins its thread even if we leave through an exception.
     warehousesim::simulation::SimulationRunner runner(
-        std::move(*made.simulation),
-        std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)));
-    warehousesim::rendering::SdlWindow window("WarehouseSim", 960, 600);
-    warehousesim::view::ViewController controller(window.renderSize(), runner.warehouse().size(),
-                                                  speed);
+        (*made.scenario)(seed),
+        std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)),
+        *made.scenario);
+    warehousesim::rendering::SdlWindow window("WarehouseSim fleet", 1280, 720);
+    warehousesim::view::FleetController controller(window.renderSize(), runner.warehouse(), speed);
     runner.setSpeed(controller.speed());
     runner.start();
 
     const auto frameBudget = std::chrono::duration_cast<Clock::duration>(
         std::chrono::duration<double>(1.0 / static_cast<double>(fps)));
+    warehousesim::view::FleetSession session(runner, controller);
     auto previousFrame = Clock::now();
     std::uint64_t frames = 0;
     while (maxFrames == 0 || frames < maxFrames) {
@@ -100,28 +104,16 @@ int main(int argc, char** argv) {
       const double frameSeconds = std::chrono::duration<double>(frameStart - previousFrame).count();
       previousFrame = frameStart;
 
-      const auto input = window.pollEvents();
-      if (input.quit) {
-        break;
-      }
+      const auto input = window.pollEvents(warehousesim::rendering::PollMode::Fleet);
       controller.resize(window.renderSize());
-      controller.apply(input, frameSeconds);
-      if (input.togglePause) {
-        runner.setPaused(controller.paused());
-      }
-      if (input.speedSteps != 0) {
-        runner.setSpeed(controller.speed());
-      }
-
-      const warehousesim::view::ViewStatus status{controller.paused(), controller.speed(),
-                                                  controller.pointer(), controller.showPaths(),
-                                                  controller.showOccupied()};
       // The simulation moves in whole steps; what is drawn is the point between the last two that
       // real time has reached, so motion is smooth at any frame rate.
-      const warehousesim::simulation::FrameState frame = runner.frame();
-      window.draw(warehousesim::view::buildScene(
-          runner.warehouse(), warehousesim::view::blend(frame.previous, frame.latest, frame.alpha),
-          controller.camera(), status));
+      const warehousesim::simulation::Snapshot drawn = session.step(input, frameSeconds);
+      if (controller.wantsQuit()) {
+        break;
+      }
+
+      window.draw(warehousesim::view::buildFleetScene(runner.warehouse(), drawn, controller));
       ++frames;
       std::this_thread::sleep_until(frameStart + frameBudget);
     }

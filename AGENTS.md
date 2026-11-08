@@ -31,14 +31,14 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `planning`   | `PathPlanner` interface, A* with options, results, reused workspace; space-time A* (`SpaceTimeAStar`) behind a `SpaceTimeConstraints` interface | core, world |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
-| `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
+| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios | all of the above, nlohmann_json |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing | core, world, nlohmann_json (private) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize), `editor_files` (save/load/predefined) | core, world, mapio (private) |
-| `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `EditorController`); no SDL | core, world, simulation, editor |
+| `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `FleetController`, `FleetSession`, `EditorController`); no SDL | core, world, simulation, editor |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
-`apps/cli` (headless), `apps/gui` (SDL3) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`.
+`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`.
 
 ### Clean architecture
 
@@ -153,6 +153,18 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   text). Anything that old readers cannot understand needs a new `version`, with the old one still read
   or refused by name; do not loosen a rule to make an input pass. A save is all or nothing (temporary file,
   then rename). `MapEditor::resize` and `replace` must keep every side within `1..world::kMaxMapSide`.
+- The interface never mutates the simulation, it asks. `view::FleetController` is given snapshots, never a
+  `Simulation` or a `SimulationRunner`, and returns a `FleetOutput`: `simulation::Command` values to post and
+  the playback state to set. `FleetSession` is the only glue and `SimulationRunner` the only owner of the
+  `Simulation` while it runs: commands go in through `post()`, are applied by the worker between two steps
+  through `simulation::apply()` and are recorded in `commandLog()` with the tick and outcome. Keep it so:
+  a new operator action is a new `Command` alternative with an `apply` overload that validates and refuses
+  (never throws for any value), a controller test, a runner test and a replay test. Pause and speed are not
+  commands (they decide when steps happen, not what they compute) and must never be recorded as one. Nothing
+  in `view` or `apps` may call a mutating method of `Simulation`, and a command must not take a draw from
+  the simulation's random number generators (`TaskCommandsDoNotDisturbTheRandomTaskStream`). The state at any
+  tick must stay a function of the scenario, the seed and the command log (`RunnerDeterminismTest`,
+  `FleetDeterminismTest`); a change that breaks replay is a bug, not a flaky test.
 - Everything the editor decides is in `editor` (the model) and `view::EditorController` (input to edits):
   both are tested without a display, with plain `InputEvents`. `rendering` only translates SDL events into
   `PointerAction`s and `EditorCommand`s, in the order they happened, and must not decide anything. Anything
@@ -206,7 +218,7 @@ cmake --build --preset default
 ctest --preset default
 build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
 build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
-SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # GUI smoke test, no window
+SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # fleet interface smoke test, no window
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-map.json --layout compact --frames 30
 # (ctest also runs the headless CLI on every layout and on a map file, checks that equal seeds give
 # equal output, and that invalid maps are refused)

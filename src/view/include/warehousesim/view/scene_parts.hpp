@@ -16,6 +16,9 @@ inline constexpr Color kBackground{18, 20, 26};
 inline constexpr Color kFloor{44, 48, 58};
 inline constexpr Color kPanel{30, 33, 41};
 inline constexpr Color kPanelText{200, 205, 215};
+// The diamonds round the pickup and the dropoff of an open task (see addDiamond).
+inline constexpr Color kPickupRing{245, 200, 60};
+inline constexpr Color kDropoffRing{90, 200, 230};
 
 // The rectangle `fraction` of its width in from every side.
 [[nodiscard]] ScreenRect inset(const ScreenRect& rect, double fraction);
@@ -30,6 +33,9 @@ void addCells(DrawList& list, const world::Warehouse& warehouse, const Camera& c
 void addGridLines(DrawList& list, const Camera& camera, const CellRange& range);
 // A thin outline just inside a cell's rectangle.
 void addOutline(DrawList& list, const ScreenRect& cell, Color color);
+// A diamond (four lines between the middles of the rectangle's sides): the shape of a destination,
+// which no robot, wall or shelf (all squares) shares.
+void addDiamond(DrawList& list, const ScreenRect& rect, Color color);
 
 // How wide the strip of row numbers along the left edge is for a grid of this height.
 [[nodiscard]] double leftRulerWidth(world::GridSize grid);

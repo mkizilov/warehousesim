@@ -37,6 +37,106 @@ std::vector<std::uint32_t> pendingOrder(const TaskQueue& queue) {
   return ids;
 }
 
+// ---- changing the priority of a waiting task ---------------------------------------------
+
+TEST(TaskQueueTest, ChangingThePriorityOfAWaitingTaskMovesItInTheDispatchOrder) {
+  TaskQueue queue;
+  const TaskId a = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::Normal);
+  const TaskId b = queue.submit(P(0, 0), P(1, 1), 1, TaskPriority::Normal);
+  const TaskId c = queue.submit(P(0, 0), P(1, 1), 2, TaskPriority::Normal);
+  ASSERT_EQ(pendingOrder(queue), (std::vector<std::uint32_t>{a.value, b.value, c.value}));
+
+  EXPECT_TRUE(queue.setPriority(c, TaskPriority::Urgent));
+  EXPECT_EQ(pendingOrder(queue), (std::vector<std::uint32_t>{c.value, a.value, b.value}));
+  EXPECT_EQ(queue.find(c)->priority, TaskPriority::Urgent);
+
+  EXPECT_TRUE(queue.setPriority(a, TaskPriority::Low));
+  EXPECT_EQ(pendingOrder(queue), (std::vector<std::uint32_t>{c.value, b.value, a.value}));
+}
+
+TEST(TaskQueueTest, ANewPriorityKeepsTheTasksAgeSoItQueuesBehindOlderTasksOfTheSamePriority) {
+  TaskQueue queue;
+  const TaskId old = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::High);
+  const TaskId young = queue.submit(P(0, 0), P(1, 1), 50, TaskPriority::Low);
+  EXPECT_TRUE(queue.setPriority(young, TaskPriority::High));
+  EXPECT_EQ(pendingOrder(queue), (std::vector<std::uint32_t>{old.value, young.value}));
+  EXPECT_EQ(queue.find(young)->createdAt, 50U);
+}
+
+TEST(TaskQueueTest, SettingThePriorityItAlreadyHasSucceedsAndChangesNothing) {
+  TaskQueue queue;
+  const TaskId a = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::High);
+  const TaskId b = queue.submit(P(0, 0), P(1, 1), 1, TaskPriority::High);
+  EXPECT_TRUE(queue.setPriority(b, TaskPriority::High));
+  EXPECT_EQ(pendingOrder(queue), (std::vector<std::uint32_t>{a.value, b.value}));
+  EXPECT_EQ(queue.pending().size(), 2U);
+}
+
+TEST(TaskQueueTest, OnlyAWaitingTaskCanChangePriorityAndARefusalChangesNothing) {
+  TaskQueue queue;
+  const TaskId assigned = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::Normal);
+  const TaskId progress = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::Normal);
+  const TaskId done = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::Normal);
+  const TaskId failed = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::Normal);
+  const TaskId cancelled = queue.submit(P(0, 0), P(1, 1), 0, TaskPriority::Normal);
+  queue.assign(assigned, RobotId{1});
+  queue.assign(progress, RobotId{2});
+  queue.markInProgress(progress);
+  queue.assign(done, RobotId{3});
+  queue.markInProgress(done);
+  queue.complete(done);
+  queue.reject(failed);
+  ASSERT_TRUE(queue.cancel(cancelled));
+
+  for (const TaskId id : {assigned, progress, done, failed, cancelled}) {
+    EXPECT_FALSE(queue.setPriority(id, TaskPriority::Urgent)) << id.value;
+    EXPECT_EQ(queue.find(id)->priority, TaskPriority::Normal) << id.value;
+  }
+  EXPECT_TRUE(queue.pending().empty());
+}
+
+TEST(TaskQueueTest, ATaskThatWasGivenBackCanChangePriorityAgain) {
+  TaskQueue queue;
+  const TaskId id = queue.submit(P(0, 0), P(1, 1), 0);
+  queue.assign(id, RobotId{1});
+  EXPECT_FALSE(queue.setPriority(id, TaskPriority::Urgent));
+  queue.release(id);
+  EXPECT_TRUE(queue.setPriority(id, TaskPriority::Urgent));
+  EXPECT_EQ(queue.pending().begin()->priority, TaskPriority::Urgent);
+}
+
+TEST(TaskQueueTest, ChangingPriorityOfAnUnknownTaskThrows) {
+  TaskQueue queue;
+  EXPECT_THROW((void)queue.setPriority(TaskId{1}, TaskPriority::High), std::out_of_range);
+  EXPECT_THROW((void)queue.setPriority(TaskId{}, TaskPriority::High), std::out_of_range);
+}
+
+TEST(TaskQueueTest, CountsAndTheQueueStayConsistentWhenPrioritiesChange) {
+  TaskQueue queue;
+  Rng rng(5);
+  std::vector<TaskId> ids;
+  for (int i = 0; i < 30; ++i) {
+    ids.push_back(queue.submit(P(0, 0), P(1, 1), static_cast<std::uint64_t>(rng.below(5)),
+                               static_cast<TaskPriority>(rng.below(4))));
+  }
+  for (int step = 0; step < 300; ++step) {
+    const TaskId id = ids[rng.below(ids.size())];
+    (void)queue.setPriority(id, static_cast<TaskPriority>(rng.below(4)));
+    ASSERT_EQ(queue.pending().size(), queue.count(TaskStatus::Pending));
+    ASSERT_EQ(queue.pending().size(), 30U);
+  }
+  PendingKey previous = *queue.pending().begin();
+  for (const PendingKey& key : queue.pending()) {
+    const Task* task = queue.find(key.id);
+    ASSERT_TRUE(task != nullptr);
+    EXPECT_EQ(key.priority, task->priority);
+    EXPECT_EQ(key.createdAt, task->createdAt);
+    EXPECT_TRUE(!(warehousesim::tasks::PendingOrder{}(key, previous)) ||
+                &key == &*queue.pending().begin());
+    previous = key;
+  }
+}
+
 // ---- adding tasks -----------------------------------------------------------------------
 
 TEST(TaskQueueTest, SubmitRecordsEveryFieldOfTheTask) {

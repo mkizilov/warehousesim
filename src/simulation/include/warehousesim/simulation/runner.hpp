@@ -2,13 +2,18 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
+#include "warehousesim/simulation/commands.hpp"
+#include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/simulation.hpp"
 #include "warehousesim/world/warehouse.hpp"
 
@@ -22,6 +27,9 @@ struct FrameState {
   Snapshot previous;  // one step before `latest` (the same as `latest` before the first step)
   Snapshot latest;
   double alpha = 0.0;  // in [0, 1]: 0 shows `previous`, 1 shows `latest`
+  // How many times the scenario has been restarted. Ticks, task ids and the command log start over
+  // at each restart, so a view that remembers any of them forgets them when this changes.
+  std::uint64_t epoch = 0;
 };
 
 // Drives a Simulation on a background thread with a fixed timestep and publishes snapshots
@@ -31,10 +39,21 @@ struct FrameState {
 //
 // The Simulation is only touched while holding the mutex, so readers never see a
 // half-updated state. The destructor stops and joins the worker.
+//
+// Operator interfaces change the simulation only by posting Commands. The worker applies them one
+// at a time, in the order posted, between two steps (also while paused, when the tick does not
+// move), and records each with the tick it was applied at, so the whole run can be replayed from
+// the scenario and that record. Pause, resume and speed are not commands: they decide when steps
+// happen, not what a step does.
 class SimulationRunner {
  public:
-  // Throws std::invalid_argument unless stepDuration is positive.
-  SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration);
+  // At most this many commands wait to be applied; post() refuses more.
+  static constexpr std::size_t kMaxQueuedCommands = 256;
+
+  // `scenario` rebuilds the scenario for ResetScenario and must build the same layout every time;
+  // without one, a reset is refused. Throws std::invalid_argument unless stepDuration is positive.
+  SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
+                   ScenarioFactory scenario = nullptr);
   ~SimulationRunner();
 
   SimulationRunner(const SimulationRunner&) = delete;
@@ -54,6 +73,18 @@ class SimulationRunner {
   void setSpeed(double speed);
   [[nodiscard]] double speed() const;
 
+  // Queues a command for the worker; returns at once. False, with nothing queued, if too many
+  // are waiting. Commands queued when the runner is stopped (or before it is started) wait until
+  // it runs. Safe to call from any thread.
+  bool post(Command command);
+  // Every command applied since the run started or was last restarted, oldest first, from index
+  // `from` on (nothing if `from` is past the end). After an accepted ResetScenario the record
+  // starts over with that command as its first entry.
+  [[nodiscard]] std::vector<CommandRecord> commandLog(std::size_t from = 0) const;
+  // The seed of the run in progress: replaying commandLog() on the scenario built from it gives
+  // the state of the run at any tick.
+  [[nodiscard]] std::uint64_t seed() const;
+
   [[nodiscard]] Snapshot snapshot() const;
   // The state to draw right now. While stepping, alpha grows with real time since the last step
   // (scaled by the playback speed); while paused or finished it stays where it was, so the picture
@@ -68,9 +99,15 @@ class SimulationRunner {
  private:
   void loop();
   [[nodiscard]] bool shouldStep() const;  // requires mutex_ held
+  // Applies the queued commands at the current tick and publishes the result. True if the
+  // scenario was restarted. Requires mutex_ held.
+  bool applyQueued();
+  [[nodiscard]] CommandOutcome execute(const Command& command);  // requires mutex_ held
+  [[nodiscard]] CommandOutcome restart(const ResetScenario& command);
 
   Simulation simulation_;
   const world::Warehouse warehouse_;
+  const ScenarioFactory scenario_;
 
   mutable std::mutex mutex_;
   std::condition_variable wake_;
@@ -82,7 +119,10 @@ class SimulationRunner {
   double frozenAlpha_ = 0.0;                           // where the display stands while not ticking
   bool ticking_ = false;                               // the worker is currently stepping on time
   std::optional<core::Tick> untilTick_;
-  std::uint64_t controlEpoch_ = 0;  // bumped by setPaused/setSpeed to cut a sleep short
+  std::uint64_t controlEpoch_ = 0;  // bumped by setPaused/setSpeed/post to cut a sleep short
+  std::deque<Command> commands_;    // posted, not yet applied
+  std::vector<CommandRecord> log_;  // applied during the current run
+  std::uint64_t restarts_ = 0;
   bool stopRequested_ = false;
   bool paused_ = false;
   std::thread worker_;

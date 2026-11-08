@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 
 #include "warehousesim/core/angle.hpp"
@@ -28,6 +29,7 @@ constexpr Color kCargo{235, 215, 160};
 constexpr Color kGaugeBackground{20, 20, 24};
 constexpr Color kPausedText{255, 120, 100};
 constexpr Color kHeldBack{255, 70, 70};
+constexpr Color kSelection{255, 255, 255};
 
 Color batteryColor(double fraction) {
   if (fraction < 0.25) {
@@ -49,6 +51,39 @@ void addTaskMarkers(DrawList& list, const simulation::Snapshot& snapshot, const 
   }
 }
 
+// A diamond around the pickup (until the cargo is collected) and the dropoff of every open task.
+// The ones of the selected task, or of the task the selected robot is on, are white and doubled.
+void addDestinationRings(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
+                         const CellRange& range, const ViewStatus& status) {
+  std::optional<core::TaskId> robotsTask;
+  if (status.selectedRobot) {
+    for (const simulation::RobotSnapshot& robot : snapshot.robots) {
+      if (robot.id == *status.selectedRobot) {
+        robotsTask = robot.task;
+      }
+    }
+  }
+  const auto ring = [&](core::Point cell, Color color, bool emphasised) {
+    if (!contains(range, cell)) {
+      return;
+    }
+    const ScreenRect rect = camera.cellRect(cell);
+    if (emphasised) {
+      addDiamond(list, inset(rect, 0.02), kSelection);
+      addDiamond(list, inset(rect, 0.12), kSelection);
+    } else {
+      addDiamond(list, inset(rect, 0.04), color);
+    }
+  };
+  for (const tasks::Task& task : snapshot.activeTasks) {
+    const bool emphasised = task.id == status.selectedTask || task.id == robotsTask;
+    if (task.status != tasks::TaskStatus::InProgress) {
+      ring(task.pickup, kPickupRing, emphasised);
+    }
+    ring(task.dropoff, kDropoffRing, emphasised);
+  }
+}
+
 // The cells each robot holds (its own and those it has claimed ahead), outlined in its colour.
 void addOccupiedCells(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
                       const CellRange& range) {
@@ -64,16 +99,22 @@ void addOccupiedCells(DrawList& list, const simulation::Snapshot& snapshot, cons
 
 // Each robot's remaining route as a line from where it is through the centre of every cell to the
 // goal, with a marker on the goal; and a cross on the cell a held-back robot may not enter yet.
+// Only the routes of `selected` if the rest are not asked for (`all`); the selected robot's route
+// is drawn three lines thick with a bigger marker.
 void addPaths(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
-              const CellRange& range) {
+              const CellRange& range, bool all, std::optional<core::RobotId> selected) {
   const auto centre = [&camera](Point cell) {
     return camera.worldToScreen(
         {static_cast<double>(cell.x) + 0.5, static_cast<double>(cell.y) + 0.5});
   };
+  const auto shown = [&](const simulation::RobotSnapshot& robot) {
+    return all || robot.id == selected;
+  };
   for (const simulation::RobotSnapshot& robot : snapshot.robots) {
-    if (robot.path.empty()) {
+    if (robot.path.empty() || !shown(robot)) {
       continue;
     }
+    const bool emphasised = robot.id == selected;
     const Color color = robotColor(robot.state, robot.goal);
     const core::Vec2 start = robot.center();
     ScreenPoint from = camera.worldToScreen({start.x, start.y});
@@ -82,16 +123,21 @@ void addPaths(DrawList& list, const simulation::Snapshot& snapshot, const Camera
       const ScreenPoint to = centre(cell);
       if (contains(range, previous) || contains(range, cell)) {
         list.commands.emplace_back(Line{from, to, color});
+        if (emphasised) {
+          list.commands.emplace_back(Line{{from.x + 1.0, from.y}, {to.x + 1.0, to.y}, color});
+          list.commands.emplace_back(Line{{from.x, from.y + 1.0}, {to.x, to.y + 1.0}, color});
+        }
       }
       from = to;
       previous = cell;
     }
     if (contains(range, robot.path.back())) {
-      list.commands.emplace_back(FillRect{inset(camera.cellRect(robot.path.back()), 0.4), color});
+      list.commands.emplace_back(
+          FillRect{inset(camera.cellRect(robot.path.back()), emphasised ? 0.3 : 0.4), color});
     }
   }
   for (const simulation::RobotSnapshot& robot : snapshot.robots) {
-    if (robot.waiting && contains(range, robot.waiting->cell)) {
+    if (shown(robot) && robot.waiting && contains(range, robot.waiting->cell)) {
       const ScreenRect r = inset(camera.cellRect(robot.waiting->cell), 0.2);
       list.commands.emplace_back(Line{{r.x, r.y}, {r.right(), r.bottom()}, kHeldBack});
       list.commands.emplace_back(Line{{r.right(), r.y}, {r.x, r.bottom()}, kHeldBack});
@@ -134,7 +180,7 @@ ScreenRect headingMarker(const ScreenRect& body, double angle) {
 // facing, a box on top while it carries cargo and, when there is room, its id and a battery
 // gauge. Purely a picture of the snapshot; no behaviour lives here.
 void addRobots(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
-               const CellRange& range) {
+               const CellRange& range, std::optional<core::RobotId> selected) {
   for (const simulation::RobotSnapshot& robot : snapshot.robots) {
     // The pose can be outside the logical cell (a robot between two cells, or an interpolated
     // one), so a robot is on screen if either its cell or the cell under its centre is.
@@ -150,6 +196,17 @@ void addRobots(DrawList& list, const simulation::Snapshot& snapshot, const Camer
     rect.x += (center.x - (static_cast<double>(robot.position.x) + 0.5)) * camera.zoom();
     rect.y += (center.y - (static_cast<double>(robot.position.y) + 0.5)) * camera.zoom();
     list.commands.emplace_back(FillRect{rect, robotColor(robot.state, robot.goal)});
+
+    if (robot.id == selected) {
+      // A white double frame round the body, whatever the robot's own colour.
+      const double cellSize = rect.width / 0.7;
+      const ScreenRect cell{rect.x - 0.15 * cellSize, rect.y - 0.15 * cellSize, cellSize, cellSize};
+      addOutline(list, cell, kSelection);
+      addOutline(
+          list,
+          {cell.x - 0.04 * cellSize, cell.y - 0.04 * cellSize, cellSize * 1.08, cellSize * 1.08},
+          kSelection);
+    }
 
     if (robot.carrying) {
       list.commands.emplace_back(FillRect{inset(rect, 0.3), kCargo});
@@ -224,7 +281,7 @@ Color robotColor(robots::RobotState state, robots::NavigationGoal goal) {
     case robots::RobotState::Charging:
       return {70, 200, 140};
     case robots::RobotState::Unavailable:
-      return {110, 110, 115};
+      return {205, 205, 210};  // pale: grey like a wall would be easy to take for one
   }
   return kFloor;
 }
@@ -279,8 +336,10 @@ std::array<std::string, 2> statusLines(const world::Warehouse& warehouse,
   }
 
   return {first.str(),
-          "Space pause  Wheel/+/- zoom  Drag/arrows/WASD pan  [ ] speed  0 fit view  "
-          "P paths  O occupied  Esc quit"};
+          status.keyHelp.empty()
+              ? "Space pause  Wheel/+/- zoom  Drag/arrows/WASD pan  [ ] speed  0 fit view  "
+                "P paths  O occupied  Esc quit"
+              : status.keyHelp};
 }
 
 DrawList buildScene(const world::Warehouse& warehouse, const simulation::Snapshot& snapshot,
@@ -296,13 +355,16 @@ DrawList buildScene(const world::Warehouse& warehouse, const simulation::Snapsho
     addCells(list, warehouse, camera, range);
     addGridLines(list, camera, range);
     addTaskMarkers(list, snapshot, camera, range);
+    if (status.destinationRings) {
+      addDestinationRings(list, snapshot, camera, range, status);
+    }
     if (status.showOccupied) {
       addOccupiedCells(list, snapshot, camera, range);
     }
-    if (status.showPaths) {
-      addPaths(list, snapshot, camera, range);
+    if (status.showPaths || status.selectedRobot) {
+      addPaths(list, snapshot, camera, range, status.showPaths, status.selectedRobot);
     }
-    addRobots(list, snapshot, camera, range);
+    addRobots(list, snapshot, camera, range, status.selectedRobot);
   }
   addRulers(list, camera, range, kStatusBarHeight);
   addStatusBar(list, statusLines(warehouse, snapshot, camera, status), status.paused, screen);

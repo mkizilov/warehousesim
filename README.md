@@ -22,10 +22,10 @@ core ← robots ──────────┴← tasks ┐
 | `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
-| `simulation` | `Simulation` tick engine, `SimulationRunner` thread, JSON, scenarios      |
+| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing (see Map editor) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize) and its file glue; no SDL, no GUI |
-| `view`       | `Camera`, `buildScene()` and `buildEditorScene()` draw lists, `ViewController`, `EditorController`; no SDL, fully tested |
+| `view`       | `Camera`, draw lists (`buildScene()`, `buildFleetScene()`, `buildEditorScene()`), `ViewController`, `FleetController`, `FleetSession`, `EditorController`; no SDL, fully tested |
 | `rendering`  | SDL3 `SdlWindow` (RAII): turns SDL events into `InputEvents`, runs a draw list |
 
 ## Build
@@ -86,15 +86,25 @@ exit status 1; an unknown layout or conflicting options exit with status 2.
 100 ms of real time at speed 1), `--speed X` (initial playback speed, 1/16 to 64), `--fps N` (frame cap,
 default 60), `--frames N` (exit after N frames; 0 = until closed).
 
+`warehousesim_gui` is the fleet management interface: the map on the left, a panel on the right with the
+robots, the selected robot, the active and finished tasks, and a prompt. See "Fleet interface" below for
+what it can do; the controls are:
+
 | Input | Action |
 |-------|--------|
+| click a robot or a row of the robot list; Tab / Shift+Tab | select a robot and inspect it |
+| click a row of a task list; `T` / Shift+`T` | select a task |
+| `N`, click a pickup cell, click a dropoff cell | add a delivery task |
+| `1` `2` `3` `4` | priority low / normal / high / urgent of the task being made, else of the selected waiting task |
 | Space | pause / resume |
 | `[` / `]` | halve / double playback speed (1/16x to 64x) |
+| `R` | start the scenario over (same layout and seed) |
 | mouse wheel, `+` / `-` | zoom about the pointer / window centre |
-| drag with any mouse button, arrow keys, WASD | pan |
+| drag with the middle or right button, arrow keys, WASD | pan |
 | `0` | fit the whole warehouse |
-| `P` / `O` | show / hide the planned routes (and a red cross on the cell a held-back robot may not enter) / the cells robots hold |
-| Esc, closing the window, Ctrl-C | quit (the worker thread is joined and SDL shut down) |
+| `P` / `O` | show / hide the planned routes of all robots (and a red cross on the cell a held-back robot may not enter) / the cells robots hold |
+| Esc | cancel task entry; else clear the selection; else quit |
+| closing the window, Ctrl-C | quit (the worker thread is joined and SDL shut down) |
 
 ## Path planning
 
@@ -504,7 +514,7 @@ Limits, honestly:
 The window shows the grid with walls, shelves, pickup `P`, dropoff `D` and charging `C` cells (letters
 appear when zoomed in), task markers, robot placeholders (a coloured square per robot by state: blue idle, orange
 heading to a pickup, red heading to a dropoff, lime heading to a charger, amber loading, magenta unloading,
-green charging, grey unavailable; a nub on the side it faces, a box on top while it carries cargo, and the id and a battery gauge when zoomed in), column/row indices along the top and left edges,
+green charging, pale grey unavailable; a nub on the side it faces, a box on top while it carries cargo, and the id and a battery gauge when zoomed in), column/row indices along the top and left edges,
 and a status bar with the tick, playback speed, zoom, task counts and the cell under the pointer.
 Two overlays, both on at start and toggled with `P` and `O`, show each robot's planned route (a line in the
 robot's colour through the cell centres to a marker on its goal, plus a red cross on the cell a held-back
@@ -533,6 +543,78 @@ cells a moving vehicle has claimed ahead of itself).
 
 Text is drawn with SDL's built-in 8x8 debug font. Hovering a robot shows its state, goal and battery in
 the status bar.
+
+## Fleet interface
+
+`warehousesim_gui` lets an operator look at the fleet and steer it without ever touching the simulation.
+
+- **Selecting and inspecting.** Click a robot on the map or in the list (or Tab through them) and the panel
+  shows its state and goal, cell and heading, speed and motion phase, battery, task and its pickup and
+  dropoff, whether it carries cargo and how many deliveries it has made, the length and end of its route and
+  the next cells, and whether it is held back (where, and by whom) or has not moved for some ticks. The
+  selected robot gets a white frame, its route is drawn thick *even when routes are off*, and the pickup and
+  dropoff of its task are doubled in white. Clicking a task row (or `T`) does the same for that task's two
+  cells. Clicking empty floor clears the selection.
+- **Seeing routes.** `P` shows every robot's planned route; a selected robot's route is always shown.
+  `O` outlines the cells robots hold.
+- **Adding a delivery task.** `N`, then click a pickup, then click a dropoff (any open floor, not the same
+  cell); `1`-`4` before or in between sets the priority. A wall, a shelf or the same cell is refused on the
+  spot and entry goes on. The added task is selected so that its priority can be changed at once.
+- **Changing a priority.** Select a task that is still *waiting* and press `1`-`4`. A task a robot has
+  claimed, or a finished one, cannot change priority (priority only orders tasks that wait); the panel says
+  so, and so does the simulation if the command reaches it anyway.
+- **Active and finished tasks.** The panel lists the active tasks (waiting ones in the order the dispatcher
+  will take them, then the ones a robot has) and the last 12 finished ones, newest first, with the counters
+  of done, failed and cancelled tasks.
+- **Pause, speed and restart.** Space, `[` `]` and `R`. A restart rebuilds the scenario from the start with
+  the same seed (and layout, whether predefined or from a map file); every hand-made task is gone with it.
+- **Telling things apart.** Robots are filled squares coloured by state (with a heading nub, a battery gauge
+  and a cargo box); obstacles are filled cells in wall and shelf colours that no robot colour comes near
+  (`NoRobotColourCanPassForAFloorOrAnObstacleOrAStationCell`); destinations are *diamonds* (amber round a
+  pickup until the cargo is collected, cyan round a dropoff), a shape nothing else has; planned paths are
+  thin lines through the cell centres in the robot's colour. A legend at the bottom of the panel shows each.
+
+### Commands
+
+The interface and the simulation meet in one place, and it is narrow.
+
+```
+ InputEvents -> FleetController -> FleetOutput{commands, paused, speed}
+                                        |
+                       FleetSession  -- post(Command) / setPaused / setSpeed -->  SimulationRunner
+                                        ^                                           | worker thread:
+                                        '-- commandLog(), frame() <-----------------' applies each command
+                                                                                      between two steps
+```
+
+- A `simulation::Command` is a plain value: `SubmitTask{pickup, dropoff, priority}`,
+  `SetTaskPriority{task, priority}` or `ResetScenario{seed?}`. `FleetController` (no SDL, no simulation
+  type but the snapshot it is shown) only *describes* what the user wants as commands. It cannot touch a
+  `Simulation`, because it is never given one.
+- `SimulationRunner::post()` queues a command (at most 256 wait; more are refused and the panel says so).
+  The worker applies the queue in order, **between two steps** and also while paused, through
+  `simulation::apply()`, which validates (a cell outside the map or not floor, the same pickup and dropoff,
+  an unknown or no longer waiting task are all refused with a reason and change nothing; nothing throws).
+  Each command is recorded in `commandLog()` with the tick it was applied at and its outcome, and the
+  interface reads that log to show "task #7 added" or why not.
+- Pausing, resuming and the speed are *not* commands: they decide when steps happen, never what a step
+  computes (`setPaused`/`setSpeed` as before).
+- **Determinism.** What a step computes depends only on the simulation state. Commands change that state
+  only at step boundaries, so the state at any tick is a function of the scenario, its seed and the command
+  log. The tick a command lands at depends on timing, but the log says which: replaying the log on a fresh
+  simulation (`RunnerDeterminismTest`, `FleetDeterminismTest`) gives the same state as the live run, and a
+  session of only looking, selecting, zooming and hovering, or of pausing and changing speed at random,
+  leaves the run byte-identical to a direct one. A hand-made task takes no draw from the random task
+  generator, so the generated stream is the same with or without it.
+- `FleetSession` is the frame loop's glue (read what to draw, tell the controller what became of its
+  commands, run it, forward its output); `apps/gui/main.cpp` only adds SDL around it, so the glue is tested
+  with a real runner and no window (`fleet_session_test.cpp`).
+
+Limits: the interface selects, adds tasks and changes priorities, but cannot cancel a task, take a robot out
+of service or edit the layout (the simulation can do all of these; they are not on the panel). A restart
+always keeps the seed it started with unless a `ResetScenario{seed}` command says otherwise (the GUI has no
+key for that). The panel is left out of windows smaller than 720 x 400. Text is the SDL debug font, so the
+panel is 39 characters wide and long messages wrap into two lines.
 
 ## Map editor and map files
 

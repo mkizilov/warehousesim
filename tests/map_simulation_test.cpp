@@ -61,6 +61,58 @@ TEST(MapSimulationTest, TheDemoSimulationIsTheDemoWarehouseRunAsAnyOtherMap) {
   EXPECT_EQ(json(a), json(b));
 }
 
+TEST(ScenarioFactoryTest, ALayoutScenarioBuildsTheSameSimulationAsTheLayoutByNameForAnySeed) {
+  for (const auto& info : warehousesim::world::predefinedLayouts()) {
+    const auto scenario = warehousesim::simulation::layoutScenario(info.name);
+    ASSERT_TRUE(scenario.has_value()) << info.name;
+    for (const std::uint64_t seed : {1U, 2U, 9U}) {
+      Simulation made = (*scenario)(seed);
+      auto direct = makeLayoutSimulation(info.name, seed);
+      ASSERT_TRUE(direct.has_value());
+      made.run(60);
+      direct->run(60);
+      EXPECT_EQ(json(made), json(*direct)) << info.name << " seed " << seed;
+    }
+  }
+}
+
+TEST(ScenarioFactoryTest, AnUnknownLayoutHasNoScenario) {
+  EXPECT_FALSE(warehousesim::simulation::layoutScenario("nowhere").has_value());
+  EXPECT_FALSE(warehousesim::simulation::layoutScenario("").has_value());
+  EXPECT_FALSE(warehousesim::simulation::layoutScenario("Demo").has_value());
+}
+
+TEST(ScenarioFactoryTest, TheSeedIsTheOnlyThingTheFactoryTakesAndItMakesTheDifference) {
+  const auto scenario =
+      warehousesim::simulation::mapScenario(layout({"P......D", "..SSSS..", "C......."}));
+  Simulation a = scenario(1);
+  Simulation b = scenario(1);
+  Simulation c = scenario(2);
+  a.run(100);
+  b.run(100);
+  c.run(100);
+  EXPECT_EQ(json(a), json(b));
+  EXPECT_NE(json(a), json(c));
+  EXPECT_EQ(a.config().seed, 1U);
+  EXPECT_EQ(c.config().seed, 2U);
+}
+
+TEST(ScenarioFactoryTest, AFactoryForALayoutThatCannotHostASimulationIsRefusedAtOnce) {
+  EXPECT_THROW((void)warehousesim::simulation::mapScenario(layout({"P..."})),
+               std::invalid_argument);
+  EXPECT_THROW((void)warehousesim::simulation::mapScenario(layout({"...D"})),
+               std::invalid_argument);
+  EXPECT_THROW((void)warehousesim::simulation::mapScenario(Warehouse(3, 3)), std::invalid_argument);
+}
+
+TEST(ScenarioFactoryTest, TheFactoryKeepsItsOwnCopyOfTheLayout) {
+  auto scenario = [] {
+    Warehouse w = layout({"P...D"});
+    return warehousesim::simulation::mapScenario(w);
+  }();
+  EXPECT_EQ(scenario(1).warehouse().toRows(), (std::vector<std::string>{"P...D"}));
+}
+
 TEST(MapSimulationTest, UnknownLayoutNamesAreStillNotFound) {
   EXPECT_FALSE(makeLayoutSimulation("nowhere", 1).has_value());
   EXPECT_FALSE(makeLayoutSimulation("", 1).has_value());

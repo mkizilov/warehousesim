@@ -1,8 +1,11 @@
 #include "warehousesim/simulation/runner.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <variant>
 
 namespace warehousesim::simulation {
 
@@ -16,9 +19,11 @@ constexpr Seconds kMinSleep{0.0002};
 
 }  // namespace
 
-SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration)
+SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
+                                   ScenarioFactory scenario)
     : simulation_(std::move(simulation)),
       warehouse_(simulation_.warehouse()),
+      scenario_(std::move(scenario)),
       stepper_(std::chrono::duration_cast<Seconds>(stepDuration).count()),
       latest_(simulation_.snapshot()),
       previous_(latest_) {}
@@ -76,6 +81,32 @@ double SimulationRunner::speed() const {
   return stepper_.speed();
 }
 
+bool SimulationRunner::post(Command command) {
+  {
+    const std::scoped_lock lock(mutex_);
+    if (commands_.size() >= kMaxQueuedCommands) {
+      return false;
+    }
+    commands_.push_back(std::move(command));
+    ++controlEpoch_;
+  }
+  wake_.notify_all();
+  return true;
+}
+
+std::vector<CommandRecord> SimulationRunner::commandLog(std::size_t from) const {
+  const std::scoped_lock lock(mutex_);
+  if (from >= log_.size()) {
+    return {};
+  }
+  return {log_.begin() + static_cast<std::ptrdiff_t>(from), log_.end()};
+}
+
+std::uint64_t SimulationRunner::seed() const {
+  const std::scoped_lock lock(mutex_);
+  return simulation_.config().seed;
+}
+
 Snapshot SimulationRunner::snapshot() const {
   const std::scoped_lock lock(mutex_);
   return latest_;
@@ -87,7 +118,7 @@ FrameState SimulationRunner::frame() const {
   if (ticking_ && !paused_) {
     alpha = stepper_.alphaAfter(std::max(0.0, Seconds(SteadyClock::now() - lastAdvance_).count()));
   }
-  return {previous_, latest_, alpha};
+  return {previous_, latest_, alpha, restarts_};
 }
 
 bool SimulationRunner::waitForTick(core::Tick tick, std::chrono::milliseconds timeout) const {
@@ -99,18 +130,75 @@ bool SimulationRunner::shouldStep() const {
   return !paused_ && (!untilTick_ || simulation_.tick() < *untilTick_);
 }
 
+CommandOutcome SimulationRunner::restart(const ResetScenario& command) {
+  if (!scenario_) {
+    return {false, "this run cannot be restarted: there is no scenario to rebuild", std::nullopt};
+  }
+  const std::uint64_t seed = command.seed.value_or(simulation_.config().seed);
+  try {
+    Simulation fresh = scenario_(seed);
+    if (fresh.warehouse().toRows() != warehouse_.toRows()) {
+      return {false, "the scenario would build another layout; not restarted", std::nullopt};
+    }
+    simulation_ = std::move(fresh);
+  } catch (const std::exception& error) {
+    return {false, std::string("could not restart: ") + error.what(), std::nullopt};
+  }
+  ++restarts_;
+  return {true, "scenario restarted (seed " + std::to_string(seed) + ")", std::nullopt};
+}
+
+CommandOutcome SimulationRunner::execute(const Command& command) {
+  if (const auto* submit = std::get_if<SubmitTask>(&command)) {
+    return apply(simulation_, *submit);
+  }
+  if (const auto* priority = std::get_if<SetTaskPriority>(&command)) {
+    return apply(simulation_, *priority);
+  }
+  return restart(std::get<ResetScenario>(command));
+}
+
+bool SimulationRunner::applyQueued() {
+  if (commands_.empty()) {
+    return false;
+  }
+  bool restarted = false;
+  while (!commands_.empty()) {
+    Command command = std::move(commands_.front());
+    commands_.pop_front();
+    CommandOutcome outcome = execute(command);
+    if (outcome.accepted && std::holds_alternative<ResetScenario>(command)) {
+      log_.clear();
+      restarted = true;
+    }
+    log_.push_back({simulation_.tick(), std::move(command), std::move(outcome)});
+  }
+  latest_ = simulation_.snapshot();
+  if (restarted) {
+    // A new run: nothing of the old one is left to interpolate from, and the display starts at
+    // the start of a step again.
+    previous_ = latest_;
+    frozenAlpha_ = 0.0;
+    ticking_ = false;
+  }
+  published_.notify_all();
+  return restarted;
+}
+
 void SimulationRunner::loop() {
   std::unique_lock lock(mutex_);
   while (true) {
+    if (stopRequested_) {
+      return;
+    }
+    applyQueued();
     if (!shouldStep()) {
       if (ticking_ && !paused_) {
         frozenAlpha_ = 1.0;  // out of steps to take: the display settles on the final state
       }
       ticking_ = false;
-      wake_.wait(lock, [this] { return stopRequested_ || shouldStep(); });
-    }
-    if (stopRequested_) {
-      return;
+      wake_.wait(lock, [this] { return stopRequested_ || shouldStep() || !commands_.empty(); });
+      continue;
     }
     if (!ticking_) {
       // Time spent paused (or finished) must not be replayed as a burst of steps, but the
@@ -127,6 +215,9 @@ void SimulationRunner::loop() {
                    [&] { return stopRequested_ || controlEpoch_ != epoch; });
     if (stopRequested_) {
       return;
+    }
+    if (applyQueued()) {
+      continue;  // restarted: begin again from the new simulation
     }
 
     const SteadyClock::time_point now = SteadyClock::now();

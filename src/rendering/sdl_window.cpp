@@ -46,6 +46,37 @@ std::optional<view::PointerButton> pointerButtonOf(Uint8 button) {
   }
 }
 
+// What a key press means to the fleet interface, if anything.
+std::optional<view::FleetKey> fleetKeyFor(SDL_Keycode key, SDL_Keymod mod, bool repeat) {
+  using view::FleetKey;
+  if (repeat || (mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0) {
+    return std::nullopt;
+  }
+  const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+  switch (key) {
+    case SDLK_TAB:
+      return shift ? FleetKey::PreviousRobot : FleetKey::NextRobot;
+    case SDLK_T:
+      return shift ? FleetKey::PreviousTask : FleetKey::NextTask;
+    case SDLK_N:
+      return FleetKey::NewTask;
+    case SDLK_1:
+      return FleetKey::Priority1;
+    case SDLK_2:
+      return FleetKey::Priority2;
+    case SDLK_3:
+      return FleetKey::Priority3;
+    case SDLK_4:
+      return FleetKey::Priority4;
+    case SDLK_R:
+      return FleetKey::Reset;
+    case SDLK_ESCAPE:
+      return FleetKey::Cancel;
+    default:
+      return std::nullopt;
+  }
+}
+
 // What a key press means to the map editor, if anything. Control (Command on a Mac) with a letter
 // is a file or history command, Shift with an arrow resizes the map, the rest are single keys.
 std::optional<view::EditorCommand> editorCommandFor(SDL_Keycode key, SDL_Keymod mod, bool repeat) {
@@ -173,6 +204,7 @@ SdlWindow::~SdlWindow() = default;
 
 InputEvents SdlWindow::pollEvents(PollMode mode) {
   const bool editing = mode == PollMode::Editor;
+  const bool fleet = mode == PollMode::Fleet;
   InputEvents result;
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
@@ -193,14 +225,17 @@ InputEvents SdlWindow::pollEvents(PollMode mode) {
       case SDL_EVENT_MOUSE_MOTION: {
         result.pointer = ScreenPoint{event.motion.x, event.motion.y};
         result.pointerLeft = false;
-        // The simulation view pans with any button; the editor paints with two and pans with one.
+        // The editor paints with the left and right buttons and pans with the middle one; the
+        // fleet interface clicks with the left (so it must not also move the map) and pans with
+        // the other two.
         const Uint32 dragButtons =
-            editing ? SDL_BUTTON_MMASK : (SDL_BUTTON_LMASK | SDL_BUTTON_MMASK | SDL_BUTTON_RMASK);
+            editing ? SDL_BUTTON_MMASK : (SDL_BUTTON_MMASK | SDL_BUTTON_RMASK);
         if ((event.motion.state & dragButtons) != 0) {
           result.dragX += event.motion.xrel;
           result.dragY += event.motion.yrel;
         }
-        if (editing && (event.motion.state & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0) {
+        if (editing &&
+            (event.motion.state & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0) {  // paint
           result.pointerActions.push_back({view::PointerAction::Kind::Move,
                                            view::PointerButton::Primary,
                                            ScreenPoint{event.motion.x, event.motion.y}});
@@ -209,8 +244,10 @@ InputEvents SdlWindow::pollEvents(PollMode mode) {
       }
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        if (editing) {
-          if (const auto button = pointerButtonOf(event.button.button)) {
+        if (editing || fleet) {
+          // The fleet interface only reads the left button; the right one means nothing to it.
+          const auto button = pointerButtonOf(event.button.button);
+          if (button && (editing || *button == view::PointerButton::Primary)) {
             const bool pressed = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
             result.pointerActions.push_back(
                 {pressed ? view::PointerAction::Kind::Press : view::PointerAction::Kind::Release,
@@ -233,6 +270,12 @@ InputEvents SdlWindow::pollEvents(PollMode mode) {
         if (editing) {
           if (const auto command = editorCommandFor(key, event.key.mod, event.key.repeat)) {
             result.commands.push_back(*command);
+            break;
+          }
+        }
+        if (fleet) {
+          if (const auto fleetKey = fleetKeyFor(key, event.key.mod, event.key.repeat)) {
+            result.fleetKeys.push_back(*fleetKey);
             break;
           }
         }

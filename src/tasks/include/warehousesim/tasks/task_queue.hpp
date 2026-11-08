@@ -74,6 +74,11 @@ class TaskQueue {
   // Any open state -> Cancelled. Returns false if the task had already finished. Telling a robot
   // that holds the task to stop is the caller's job (Simulation::cancelTask does it).
   bool cancel(core::TaskId id);
+  // Changes the priority of a task that is still Pending, which moves it to its new place in the
+  // dispatch order (its age and id do not change). Returns false, changing nothing, for a task in
+  // any other state: priority only orders tasks that wait, so for a task a robot has claimed there
+  // is nothing left for it to decide. Setting the priority it already has succeeds.
+  bool setPriority(core::TaskId id, TaskPriority priority);
 
  private:
   Task& mutableTask(core::TaskId id);

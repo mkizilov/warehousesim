@@ -80,9 +80,7 @@ std::vector<core::Point> startCells(const world::Warehouse& warehouse) {
   return starts;
 }
 
-}  // namespace
-
-Simulation makeMapSimulation(world::Warehouse warehouse, std::uint64_t seed) {
+void requireHostable(const world::Warehouse& warehouse) {
   const std::vector<world::LayoutIssue> issues = world::checkLayout(warehouse);
   const auto blocking =
       std::find_if(issues.begin(), issues.end(),
@@ -90,11 +88,33 @@ Simulation makeMapSimulation(world::Warehouse warehouse, std::uint64_t seed) {
   if (blocking != issues.end()) {
     throw std::invalid_argument("the layout cannot host a simulation: " + blocking->message);
   }
+}
+
+}  // namespace
+
+Simulation makeMapSimulation(world::Warehouse warehouse, std::uint64_t seed) {
+  requireHostable(warehouse);
   // Without charging stations robots have no battery model (they could never recharge).
   const bool chargers = !warehouse.cellsOfType(world::CellType::Charging).empty();
   const std::vector<core::Point> starts = startCells(warehouse);
   return Simulation(std::move(warehouse), starts,
                     scenarioConfig(seed, chargers ? energySpec() : handlingSpec()));
+}
+
+ScenarioFactory mapScenario(world::Warehouse warehouse) {
+  // Refuse an unusable layout now rather than the first time the factory is used.
+  requireHostable(warehouse);
+  return [warehouse = std::move(warehouse)](std::uint64_t seed) {
+    return makeMapSimulation(warehouse, seed);
+  };
+}
+
+std::optional<ScenarioFactory> layoutScenario(std::string_view layoutName) {
+  auto warehouse = world::makePredefinedWarehouse(layoutName);
+  if (!warehouse) {
+    return std::nullopt;
+  }
+  return mapScenario(*std::move(warehouse));
 }
 
 Simulation makeDemoSimulation(std::uint64_t seed) {

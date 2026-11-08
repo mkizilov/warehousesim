@@ -102,6 +102,13 @@ bool Simulation::cancelTask(core::TaskId id) {
   return true;
 }
 
+bool Simulation::setTaskPriority(core::TaskId id, tasks::TaskPriority priority) {
+  if (tasks_.find(id) == nullptr) {
+    throw std::out_of_range("unknown task id");
+  }
+  return tasks_.setPriority(id, priority);
+}
+
 Robot& Simulation::robotById(core::RobotId id) {
   if (!id.valid() || id.value > robots_.size()) {
     throw std::out_of_range("unknown robot id");
@@ -180,6 +187,13 @@ Snapshot Simulation::snapshot() const {
   for (const tasks::Task& task : tasks_.all()) {
     if (task.isOpen()) {
       result.activeTasks.push_back(task);
+    }
+  }
+  const std::vector<tasks::Task>& everyTask = tasks_.all();
+  for (auto task = everyTask.rbegin();
+       task != everyTask.rend() && result.recentTasks.size() < kRecentTaskCount; ++task) {
+    if (task->isFinished()) {
+      result.recentTasks.push_back(*task);
     }
   }
   result.completedTasks = tasks_.count(tasks::TaskStatus::Completed);
