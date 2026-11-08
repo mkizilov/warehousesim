@@ -1,7 +1,7 @@
 find_package(Threads REQUIRED)
 
 warehousesim_add_module(simulation
-  SOURCES runner.cpp scenarios.cpp serialization.cpp simulation.cpp
+  SOURCES cooperation.cpp runner.cpp scenarios.cpp serialization.cpp simulation.cpp
   PUBLIC_DEPS
     warehousesim::core warehousesim::world warehousesim::robots
     warehousesim::planning warehousesim::tasks warehousesim::traffic

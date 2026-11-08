@@ -71,6 +71,9 @@ class AStarPlanner final : public PathPlanner {
   SearchResult search(const world::Warehouse& warehouse, core::Point start, core::Point goal,
                       const BlockedSet& blocked, Path& path);
 
+  // Cells expanded by every search so far.
+  [[nodiscard]] std::uint64_t work() const noexcept override { return expanded_; }
+
  private:
   struct Node {
     std::uint32_t stamp = 0;  // generation in which `cost` and `parent` are valid
@@ -83,6 +86,8 @@ class AStarPlanner final : public PathPlanner {
     std::uint32_t index;
   };
 
+  SearchResult run(const world::Warehouse& warehouse, core::Point start, core::Point goal,
+                   const BlockedSet& blocked, Path& path);
   void prepare(std::size_t cellCount);
   [[nodiscard]] bool isBlocked(std::size_t index) const noexcept {
     return blockedStamp_[index] == generation_;
@@ -96,6 +101,7 @@ class AStarPlanner final : public PathPlanner {
   std::vector<std::uint32_t> blockedStamp_;
   std::vector<OpenEntry> open_;
   std::uint32_t generation_ = 0;
+  std::uint64_t expanded_ = 0;
 };
 
 }  // namespace warehousesim::planning

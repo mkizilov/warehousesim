@@ -316,9 +316,11 @@ TEST(MovementTest, RobotsSpecsAreValidatedWhenTheSimulationIsBuilt) {
 
 // ---- invalid movement is prevented ----------------------------------------------------
 
-TEST(MovementTest, ARobotNeverDrivesIntoACellAnotherRobotHoldsAndFindsWayAroundIt) {
-  Simulation sim(layout({"......", "......"}), {P(0, 0), P(3, 0)}, vehicleConfig());
-  ASSERT_TRUE(sim.disableRobot(R(2)));  // parked in the way, out of service
+// A robot parked in the way, out of service: the driver must go round it and never into it.
+// Returns whether the driver was held up (waited) and whether it was given another route.
+std::pair<bool, bool> driveAroundAParkedRobot(SimulationConfig config) {
+  Simulation sim(layout({"......", "......"}), {P(0, 0), P(3, 0)}, config);
+  EXPECT_TRUE(sim.disableRobot(R(2)));
   const TaskId id = sim.submitTask(P(5, 0), P(5, 1));
   MotionAudit audit(sim);
   bool waited = false;
@@ -332,9 +334,24 @@ TEST(MovementTest, ARobotNeverDrivesIntoACellAnotherRobotHoldsAndFindsWayAroundI
     EXPECT_EQ(sim.robots()[1].position(), P(3, 0));  // the parked robot never moved
     EXPECT_DOUBLE_EQ(sim.robots()[1].speed(), 0.0);
   }
-  EXPECT_TRUE(waited);                                             // it really was held up
-  EXPECT_EQ(sim.tasks().find(id)->status, TaskStatus::Completed);  // and then went around
+  EXPECT_EQ(sim.tasks().find(id)->status, TaskStatus::Completed);  // it went around
   EXPECT_EQ(sim.robots()[0].position(), P(5, 1));
+  return {waited, sim.planningStats().reroutes > 0};
+}
+
+TEST(MovementTest, ARobotNeverDrivesIntoACellAnotherRobotHoldsAndFindsWayAroundIt) {
+  // Without cooperative planning the driver runs up to the parked robot, is held up there and only
+  // then routes round it.
+  SimulationConfig plain = vehicleConfig();
+  plain.cooperative = false;
+  const auto [waited, rerouted] = driveAroundAParkedRobot(plain);
+  EXPECT_TRUE(waited);  // it really was held up
+  EXPECT_FALSE(rerouted);
+}
+
+TEST(MovementTest, WithCooperativePlanningTheDriverIsRoutedRoundTheParkedRobotBeforeItIsHeldUp) {
+  const auto outcome = driveAroundAParkedRobot(vehicleConfig());
+  EXPECT_TRUE(outcome.second);  // the table held it back and the search found another way
 }
 
 TEST(MovementTest, AnIdleRobotInTheWayStepsAsideWhenTheOneBehindHasWaited) {

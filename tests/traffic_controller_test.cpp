@@ -533,6 +533,7 @@ TEST(TrafficControllerPropertyTest, WhateverTheTrafficNoTwoRobotsEverHaveTheSame
   const Warehouse floor = layout({"..........", "..........", "....##....", "..........",
                                   "..........", "....##....", "..........", ".........."});
   Rng rng(2026);
+  int delayed = 0;
   int waits = 0;
   int inTheWay = 0;
   int planned = 0;
@@ -574,10 +575,19 @@ TEST(TrafficControllerPropertyTest, WhateverTheTrafficNoTwoRobotsEverHaveTheSame
     // What a robot is told it may do is exactly what is on the table for it: the forecast of the
     // route cut where it was held back is reserved in full.
     for (std::size_t r = 0; r < fleet.size(); ++r) {
-      const Robot cut = fleet[r].withRouteCutTo(plans[r].clearedCells);
-      const auto holds = warehousesim::robots::forecastHolds(cut, controller.horizon());
       if (plans[r].inTheWay) {
         continue;  // only its facts are on the table
+      }
+      auto holds = warehousesim::robots::forecastHolds(
+          fleet[r].withRouteCutTo(plans[r].clearedCells), controller.horizon());
+      if (plans[r].delaySteps > 0) {
+        // It reserved its whole route, set off after waiting where it is.
+        const auto whole = warehousesim::robots::forecastHolds(fleet[r], controller.horizon());
+        holds.assign(plans[r].delaySteps, std::vector<Point>{fleet[r].position()});
+        holds.insert(holds.end(), whole.begin(),
+                     whole.begin() +
+                         static_cast<std::ptrdiff_t>(controller.horizon() - plans[r].delaySteps));
+        ++delayed;
       }
       for (std::size_t s = 0; s < holds.size(); ++s) {
         for (const Point cell : holds[s]) {
@@ -592,6 +602,7 @@ TEST(TrafficControllerPropertyTest, WhateverTheTrafficNoTwoRobotsEverHaveTheSame
       ++planned;
     }
   }
+  EXPECT_GE(delayed, 1);  // and some robots at rest reserved the delayed route
   EXPECT_GT(waits, 100);  // plenty of the rounds really did have clashes to settle
   EXPECT_GT(planned - waits, 100);
   EXPECT_GE(inTheWay, 1);

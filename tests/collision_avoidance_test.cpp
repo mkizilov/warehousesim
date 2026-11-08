@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "scenario_support.hpp"
 #include "warehousesim/core/angle.hpp"
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
@@ -31,7 +32,6 @@
 
 namespace {
 
-using warehousesim::core::kPi;
 using warehousesim::core::Point;
 using warehousesim::core::RobotId;
 using warehousesim::core::TaskId;
@@ -42,193 +42,21 @@ using warehousesim::simulation::makeLayoutSimulation;
 using warehousesim::simulation::RobotSnapshot;
 using warehousesim::simulation::Simulation;
 using warehousesim::simulation::SimulationConfig;
-using warehousesim::tasks::Assignment;
-using warehousesim::tasks::Dispatcher;
-using warehousesim::tasks::DispatchPlan;
-using warehousesim::tasks::Task;
-using warehousesim::tasks::TaskQueue;
 using warehousesim::tasks::TaskStatus;
 using warehousesim::traffic::ConflictKind;
 using warehousesim::world::Warehouse;
-
-Point P(int x, int y) { return Point{x, y}; }
-RobotId R(std::uint32_t id) { return RobotId{id}; }
-
-Warehouse layout(const std::vector<std::string>& rows) {
-  auto warehouse = Warehouse::fromRows(rows);
-  if (!warehouse) {
-    throw std::logic_error("bad test layout");
-  }
-  return *warehouse;
-}
-
-Warehouse openFloor(int width, int height) {
-  return layout(std::vector<std::string>(static_cast<std::size_t>(height),
-                                         std::string(static_cast<std::size_t>(width), '.')));
-}
-
-// Two 3x3 rooms joined by a one-cell-wide corridor (row 1, x = 3..11) with a niche above its
-// middle.
-//
-//   . . . # # # # . # # # # . . .
-//   . . . . . . . . . . . . . . .
-//   . . . # # # # # # # # # . . .
-Warehouse hall() { return layout({"...####.####...", "...............", "...#########..."}); }
-
-SimulationConfig ideal() {
-  SimulationConfig config;
-  config.maxBlockedTicks = 3;
-  return config;
-}
-
-SimulationConfig vehicles() {
-  SimulationConfig config = ideal();
-  config.robot.acceleration = 0.5;
-  config.robot.deceleration = 1.0;
-  config.robot.turnRate = kPi / 2.0;
-  config.robot.loadTicks = 2;
-  config.robot.unloadTicks = 2;
-  return config;
-}
-
-// Hands every task to the robot named for it, as soon as that robot is free. The default dispatcher
-// would give each task to the nearest robot, which is not always the one a scenario needs.
-class ScriptedDispatcher final : public Dispatcher {
- public:
-  explicit ScriptedDispatcher(std::vector<std::pair<TaskId, RobotId>> script)
-      : script_(std::move(script)) {}
-
-  [[nodiscard]] DispatchPlan plan(const Warehouse&, std::span<const Robot>,
-                                  const TaskQueue& queue) override {
-    DispatchPlan plan;
-    for (const auto& [task, robot] : script_) {
-      const Task* found = queue.find(task);
-      if (found != nullptr && found->status == TaskStatus::Pending) {
-        plan.assignments.push_back(Assignment{robot, task, 0});
-      }
-    }
-    return plan;
-  }
-
- private:
-  std::vector<std::pair<TaskId, RobotId>> script_;
-};
-
-// A scenario: some robots, and for each a list of tasks it is to do in order.
-struct Job {
-  Point start;
-  Point pickup;
-  Point dropoff;
-};
-
-struct Scenario {
-  Simulation sim;
-  std::vector<TaskId> tasks;  // by robot, the first task of each
-
-  Scenario(Warehouse warehouse, const std::vector<Job>& jobs, SimulationConfig config)
-      : sim(makeSim(std::move(warehouse), jobs, config)) {
-    for (std::size_t i = 0; i < jobs.size(); ++i) {
-      tasks.push_back(sim.submitTask(jobs[i].pickup, jobs[i].dropoff));
-    }
-  }
-
- private:
-  static Simulation makeSim(Warehouse warehouse, const std::vector<Job>& jobs,
-                            SimulationConfig config) {
-    std::vector<Point> starts;
-    std::vector<std::pair<TaskId, RobotId>> script;
-    for (std::size_t i = 0; i < jobs.size(); ++i) {
-      starts.push_back(jobs[i].start);
-      script.emplace_back(TaskId{static_cast<std::uint32_t>(i + 1)},
-                          RobotId{static_cast<std::uint32_t>(i + 1)});
-    }
-    return Simulation(std::move(warehouse), starts, config, nullptr,
-                      std::make_unique<ScriptedDispatcher>(std::move(script)));
-  }
-};
-
-// What must hold on every tick, whatever the robots are up to.
-class TrafficAudit {
- public:
-  explicit TrafficAudit(const Simulation& sim) { remember(sim); }
-
-  void check(const Simulation& sim) {
-    const auto& robots = sim.robots();
-    std::set<Point> held;
-    for (const Robot& robot : robots) {
-      for (const Point cell : sim.world().holdsOf(robot.id())) {
-        EXPECT_TRUE(held.insert(cell).second)
-            << "cell (" << cell.x << "," << cell.y << ") held twice, tick " << sim.tick();
-        EXPECT_TRUE(sim.world().isWalkable(cell)) << "tick " << sim.tick();
-      }
-    }
-    for (std::size_t i = 0; i < robots.size(); ++i) {
-      const auto here = robots[i].pose();
-      const auto before = poses_[i];
-      EXPECT_LE(std::hypot(here.x - before.x, here.y - before.y), 1.0 + 1e-6)
-          << "robot " << i + 1 << " jumped, tick " << sim.tick();
-      for (std::size_t j = i + 1; j < robots.size(); ++j) {
-        const auto other = robots[j].pose();
-        EXPECT_GE(std::hypot(here.x - other.x, here.y - other.y), 1.0 - 1e-6)
-            << "robots " << i + 1 << " and " << j + 1 << " overlap, tick " << sim.tick();
-        const bool moved = cells_[i] != robots[i].position();
-        EXPECT_FALSE(moved && cells_[i] == robots[j].position() &&
-                     cells_[j] == robots[i].position())
-            << "robots " << i + 1 << " and " << j + 1 << " swapped cells, tick " << sim.tick();
-      }
-    }
-    remember(sim);
-  }
-
- private:
-  void remember(const Simulation& sim) {
-    cells_.clear();
-    poses_.clear();
-    for (const Robot& robot : sim.robots()) {
-      cells_.push_back(robot.position());
-      poses_.push_back(robot.pose());
-    }
-  }
-
-  std::vector<Point> cells_;
-  std::vector<warehousesim::core::Vec2> poses_;
-};
-
-// Runs until every task of the scenario is completed (or `limit` ticks), auditing every tick, and
-// returns the tick each one completed at (0 for a task that never did).
-std::vector<std::uint64_t> runToCompletion(
-    Scenario& scenario, int limit, const std::function<void(const Simulation&)>& watch = {}) {
-  TrafficAudit audit(scenario.sim);
-  std::vector<std::uint64_t> done(scenario.tasks.size(), 0);
-  for (int i = 0; i < limit; ++i) {
-    scenario.sim.step();
-    audit.check(scenario.sim);
-    if (watch) {
-      watch(scenario.sim);
-    }
-    bool all = true;
-    for (std::size_t t = 0; t < scenario.tasks.size(); ++t) {
-      if (scenario.sim.tasks().find(scenario.tasks[t])->status == TaskStatus::Completed) {
-        if (done[t] == 0) {
-          done[t] = scenario.sim.tick();
-        }
-      } else {
-        all = false;
-      }
-    }
-    if (all) {
-      break;
-    }
-  }
-  return done;
-}
-
-// How long robot `which` of `jobs` takes if it is alone in the warehouse.
-std::uint64_t soloTime(const Warehouse& warehouse, const std::vector<Job>& jobs, std::size_t which,
-                       SimulationConfig config) {
-  Scenario alone(warehouse, {jobs[which]}, config);
-  return runToCompletion(alone, 400)[0];
-}
+using warehousesim_test::hall;
+using warehousesim_test::ideal;
+using warehousesim_test::Job;
+using warehousesim_test::layout;
+using warehousesim_test::openFloor;
+using warehousesim_test::P;
+using warehousesim_test::R;
+using warehousesim_test::runToCompletion;
+using warehousesim_test::Scenario;
+using warehousesim_test::soloTime;
+using warehousesim_test::TrafficAudit;
+using warehousesim_test::vehicles;
 
 // ---- crossing paths -----------------------------------------------------------------------
 
@@ -459,8 +287,7 @@ TEST(CollisionAvoidanceTest, WithReservationsOffRobotsStillNeverCollideTheyJustM
   EXPECT_EQ(scenario.sim.reservations().occupancyCount(), 0U);
 }
 
-// ---- waiting, and asking for another way
-// ---------------------------------------------------------
+// ---- waiting, and asking for another way --------------------------------------------------------
 
 //   R1 crosses R2's road and stops on the crossing to load for a long time.
 std::vector<Job> loadingOnTheRoad() {
@@ -525,8 +352,7 @@ TEST(CollisionAvoidanceTest, ADetourLongerThanTheAllowanceIsNotTaken) {
   EXPECT_GT(done[1], done[0] - 12);  // it had to wait for the loading robot to finish and leave
 }
 
-// ---- what the picture is told
-// ---------------------------------------------------------------------
+// ---- what the picture is told -------------------------------------------------------------------
 
 TEST(CollisionAvoidanceTest, VehiclesReportTheCellsTheyHoldAheadOfThemselves) {
   Scenario scenario(openFloor(11, 11), crossing(), vehicles());

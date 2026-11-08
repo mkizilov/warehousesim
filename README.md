@@ -376,7 +376,114 @@ Limits: the table looks 12 steps ahead, so a robot that has already entered a co
 priority is still far down it cannot wait outside, and falls back on the physical rules (one of them is
 moved aside if it can be). Priority is the robot id, so a low-priority robot can be held back for a long
 time by a busy high-priority one. Three or more robots locked in a one-cell corridor with no free
-neighbour between them can still deadlock.
+neighbour between them can still deadlock. The next section adds a search that finds a way round and a
+way out of deadlocks, and lists what is still not guaranteed.
+
+## Cooperative planning
+
+The table can say "wait" but cannot find a way *round*, or make a robot get out of another's way. This
+stage adds **prioritized (decoupled) planning**: robots plan one after another in order of priority
+(lowest id first, as everywhere in the engine), each in space and time around the reservations of the
+robots before it. It is cheap and simple, and it works well in practice, but it is neither complete nor
+optimal; see the limits below.
+
+- **`planning::SpaceTimeAStar`** searches over (cell, step) states within a window of at most 256 steps
+  (the simulation uses the reservation horizon, 12). A robot may move to a neighbouring cell or *wait*
+  where it is, if the `SpaceTimeConstraints` it is given say the cell is free at that step and the next
+  (a robot holds the cell it is entering) and the move is not a swap with another robot. The heuristic
+  is the true distance on the empty map (a breadth-first distance field per goal, kept for the last 24
+  goals and keyed by a hash of the walkable cells, so a changed layout never reuses a stale field). The
+  goal only counts as reached if nobody needs it again before the window ends (otherwise the robot
+  would park in somebody's way) and it is *terminal*: a plan never passes through it, because a robot
+  stops the first time it gets there. If the window ends first the result is `Partial`, the state
+  nearest the goal. Ties are broken by (f, h, state index) and, between plans of equal time, by fewer
+  moves, so waiting is preferred to wandering. Work is counted in states expanded.
+- **`traffic::CooperativeRouter`** serves a robot the table holds back. The plan starts where the cells
+  the robot has already been granted end, at the step it gets there (`robots::forecastHolds`: a moving
+  vehicle cannot stop at once). First `followRoute` measures the current route against the
+  reservations (can it be followed, waiting where needed, and when does it arrive?), then the search
+  runs. The new route replaces the old one only if the old one cannot be followed at all (a *dodge*: the
+  robot is in somebody's way and steps into a side cell; at most `maxDodgeCells` = 12 cells longer) or
+  the new one arrives sooner or gets nearer (at most `maxDetourCells` = 4 longer). Beyond the window a
+  plain A* tail, steering clear of robots standing still, completes the route. Granted cells are never
+  taken back.
+- **`traffic::ProgressMonitor`** counts, for each robot that wants to move, how many ticks it has stayed
+  within 2 cells of where it began to wait, and whom it waits for. A robot waits for at most one other,
+  so rings of robots waiting for each other (deadlocks) are found by following those links.
+- **In `Simulation`** (`cooperation.cpp`):
+  - *Work per update is limited.* All searches of a step share `planningWorkPerStep` (4000) and one
+    search may spend `planningWorkPerSearch` (1500). Work is counted in states expanded, never in time,
+    so the limit cannot make a run depend on the machine (`PathPlanner::work()` reports the cells the
+    plain planner has expanded, so `peakStepWork` counts that too). A search that does not fit waits for the next
+    step, where the robots put off longest go first, each with a share of its own; one that runs out of
+    work is repeated on the next tick with twice the allowance, up to eight times the first.
+  - *Replanning.* A held-back robot searches when it first waits and then every `replanInterval` (4)
+    ticks. Routes also change with the layout: `Simulation::placeObstacle` and `clearObstacle` rebuild
+    the table, and a robot whose route crosses a new wall gets a new one from the last cell it was
+    granted; with none, a task not yet collected goes back to the queue and a carried one fails. Tasks
+    that start or end on the wall are cancelled. Cancelling or reassigning a task replaces the route as
+    before.
+  - *Prolonged blocking.* A robot that wants to move and does not for `prolongedBlockTicks` (20) ticks is
+    counted (`prolongedBlocks`) and its searches may spend twice the work.
+  - *Deadlock recovery.* A ring whose robots have all been stuck for `deadlockTicks` (6) is a deadlock.
+    The first time, the lowest-priority robot that is not busy in place (loading, unloading, charging,
+    out of service), has not moved this step and has a free neighbour is moved aside one cell. If the
+    ring is still there after as many ticks again, and again, the lowest-priority robot
+    in it that has not had its turn is put first in the order of priority for `priorityBoostTicks` (40),
+    so that the others plan around its route. A ring in which nobody has room is counted as unresolved.
+  - *Giving up.* A robot stuck for `abandonTicks` (150) hands its task back: to the queue if not yet
+    collected, failed if it carries cargo.
+- **Two smaller changes to the layers below.** A robot at rest that cannot take its next cell reserves
+  what it will do, which is to wait a little (up to 6 steps) and then go, instead of standing where it is
+  for the whole horizon, so the robots after it can see that it will move off. A robot asked to step
+  aside prefers a cell off the route of the robot that wants its cell, so it is not pushed along in
+  front of it.
+- **Determinism.** The same simulation state gives the same decisions: priority is the id (changed only
+  by the boost), work is counted rather than timed, ties have explicit keys, and nothing depends on
+  container order. `TheSameSimulationRunTwiceDecidesTheSameThingsEveryTick` compares snapshots on every
+  tick at two work limits.
+- **Switching it off.** `SimulationConfig::cooperative = false` leaves the table and the physical rules
+  without any search (the two smaller changes above still apply); `reservations = false` leaves the
+  physical layer only. Safety never depends on this stage: `TrafficAudit` (no overlap, no swap, at most a
+  cell of movement per tick, no task lost) runs on every tick of every scenario test.
+- **What you can see.** The snapshot and JSON have a `planning` object (`searches`, `reroutes`, `dodges`,
+  `partialPlans`, `outOfBudget`, `deferred`, `work`, `peakStepWork`, `obstacleRepairs`, `prolongedBlocks`,
+  `deadlocks`, `deadlocksRecovered`, `deadlocksUnresolved`, `priorityBoosts`, `abandoned`) and each robot
+  has `stuckTicks`.
+
+What it buys, measured: on the bundled layouts, 3000 ticks and seeds 1 to 10, the previous stage completed
+195.4 (188 to 200) tasks on average on `demo`, 94.5 (91 to 100) on `compact` and 146.8 (139 to 157) on
+`fulfilment`; this one completes 217.7 (213 to 225), 107.7 (105 to 110) and 155.7 (149 to 164), with no
+failed task in either. That is the effect of the search, the delayed reservations and the sidestep
+preference together (they were not measured apart), and on `fulfilment` the ranges overlap. In the
+scenario tests, two robots meeting in a one-cell corridor with a niche pass at the niche in less time
+than when they meet and sort it out afterwards, and eight robots sharing a long corridor with niches all
+get through. The scenarios cover narrow corridors, intersections, several destinations and conflicting
+priorities, and 20 random crossings of a corridor with a niche all end with every task done.
+
+Limits, honestly:
+
+- **Not complete.** Priority is fixed (the id), so a lower-priority robot always adapts, even when it
+  would be cheaper for the other. A solution that needs the robot with priority to give way first is
+  missed; the boost that ends a deadlocked ring is the only exception.
+- **Not optimal.** The search is optimal for one robot given the reservations of the ones before it, not
+  for all of them together. Detours are capped (`maxDetourCells`, `maxDodgeCells`), so a robot sometimes
+  waits where a longer route would have been faster.
+- **Short sight.** It plans 12 steps ahead. A conflict further off is dealt with only when it comes into
+  the window, and the tail of a long route ignores other robots (except those standing still).
+- **Bounded work.** Under the work limit a search can be put off or cut short; the table and the physical
+  rules keep robots safe meanwhile, but they may wait longer.
+- **Nothing sends an idle robot away.** Robots that stand still are obstacles to planning. An idle robot
+  boxed in by robots that wait for its cell (four robots delivering to one corner cell) or pushed ahead
+  of another robot into a dead end that holds that robot's goal stays there, and so do the robots around
+  it. `RobotsQueuingAroundAnIdleRobotOnTheirSharedGoalStaySafe` and
+  `AnIdleRobotPushedIntoADeadEndOntoAnotherRobotsGoalStaysSafe` pin that these cases stay safe and are
+  reported (`prolongedBlocks`, `abandoned`), not that they are solved; after `abandonTicks` the task
+  goes back to the queue and, in the dead-end scenario, to the same robot again. The tests that expect
+  every task to finish use goals of their own for each robot for this reason.
+- **Rings with no room** are counted as unresolved and left to `abandonTicks`, and three or more robots
+  locked in a one-cell corridor with no free neighbour can still deadlock.
+
 ## Visualisation
 
 The window shows the grid with walls, shelves, pickup `P`, dropoff `D` and charging `C` cells (letters
@@ -419,9 +526,9 @@ the status bar.
   layout has any, otherwise from an aisle cell beside a shelf, to a random `Dropoff`.
 - The bundled robots drive like vehicles: top speed 1 cell per tick, acceleration 0.5, deceleration 1 and a
   quarter turn per tick, stopping at every corner. That costs throughput against the idealised robot: in
-  3000 ticks they complete 188 to 197 tasks on `demo`, 91 to 100 on `compact` and 148 to 157 on `fulfilment`
-  (seeds 1 to 3), against 315 to 343, 159 to 160 and 227 to 239 with idealised robots (measured before
-  collision avoidance).
+  3000 ticks they complete 213 to 225 tasks on `demo`, 105 to 110 on `compact` and 149 to 164 on `fulfilment`
+  (seeds 1 to 10, with cooperative planning), against 315 to 343, 159 to 160 and 227 to 239 with idealised
+  robots (seeds 1 to 3, measured before collision avoidance).
 - Robots act in id order each tick (see Robots above). A robot blocked for 3 ticks makes an idle or lower-priority (higher id)
   blocker step aside, or routes around a higher-priority one, or, face to face with a blocker that cannot
   move, steps aside itself. Dropoffs are single cells at the edge of the demo layout, so heavy demand queues

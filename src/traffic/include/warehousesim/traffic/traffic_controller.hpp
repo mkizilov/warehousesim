@@ -4,7 +4,8 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <unordered_set>
+#include <unordered_map>
+#include <vector>
 
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/ids.hpp"
@@ -25,6 +26,10 @@ struct TrafficPlan {
   // The clash is on a cell the robot is already standing on or holds, so waiting cannot avoid it:
   // a robot with the right of way wants to pass through. The robot has to be moved or move itself.
   bool inTheWay = false;
+  // The robot is at rest and cannot take its next cell yet. What it reserved is its whole route,
+  // starting this many steps from now, instead of standing where it is. 0: it reserved the cells
+  // before the clash (or, with no clash, everything).
+  std::size_t delaySteps = 0;
 
   [[nodiscard]] bool waiting() const noexcept { return conflict.has_value(); }
 };
@@ -41,14 +46,14 @@ struct TrafficStats {
 
 // Builds the reservation table for one simulation step and tells each robot how far it may go.
 //
-// Priority is the robot id, lowest first. Each step starts with beginStep(), which puts what is
-// already a fact on the table: every robot's cell and the cells it holds, and robots standing
-// still for the whole horizon. Then each robot with a route calls plan(), in ascending id order
-// (calling out of order throws). plan() forecasts the cells the robot would hold on every step of
-// the horizon if nothing were in its way (robots::forecastHolds, the same motion code the
-// simulation runs), and reserves them. Because robots plan in priority order, whatever a robot
-// reserves was checked against every robot that outranks it, and nothing that outranks it has to
-// give way to it.
+// Priority is the robot id, lowest first (or an order given to beginStep). Each step starts with
+// beginStep(), which puts what is already a fact on the table: every robot's cell and the cells it
+// holds, and robots standing still for the whole horizon. Then each robot with a route calls
+// plan(), in order of priority (calling out of order throws). plan() forecasts the cells the robot
+// would hold on every step of the horizon if nothing were in its way (robots::forecastHolds, the
+// same motion code the simulation runs), and reserves them. Because robots plan in priority order,
+// whatever a robot reserves was checked against every robot that outranks it, and nothing that
+// outranks it has to give way to it.
 //
 // If the route clashes with a reservation already made, the robot is held back before the first
 // cell that clashes: its plan is cut there and it reserves the cell it will wait on instead. The
@@ -75,12 +80,19 @@ class TrafficController {
                              std::size_t horizon = kDefaultHorizon);
 
   // Starts step `now`: forgets the last step's reservations and reserves the facts. Throws
-  // std::logic_error if two robots hold the same cell.
-  void beginStep(core::Tick now, std::span<const robots::Robot> fleet);
+  // std::logic_error if two robots hold the same cell. Priority is the robot id, lowest first,
+  // unless `priority` names some robots: those come first, in the order named, ahead of everybody
+  // else (who stay in id order). Ids that are not in the fleet are ignored.
+  void beginStep(core::Tick now, std::span<const robots::Robot> fleet,
+                 std::span<const core::RobotId> priority = std::span<const core::RobotId>());
 
   // Reserves `robot`'s forecast route. Throws std::logic_error before beginStep(), or if robots do
-  // not plan in ascending id order within a step.
+  // not plan in order of priority within a step.
   [[nodiscard]] TrafficPlan plan(const robots::Robot& robot);
+  // Plans the robot that was planned last once more, after its route or state changed (typically
+  // because the cooperative router gave it a new route): what it reserved before is replaced.
+  // Throws std::logic_error if any other robot was planned last, or none was.
+  [[nodiscard]] TrafficPlan replan(const robots::Robot& robot);
 
   // Tells the table that `robot` was moved after beginStep() by something other than its own turn
   // (another robot made it step aside). What the table held for it is replaced by where it is now,
@@ -93,15 +105,22 @@ class TrafficController {
   [[nodiscard]] const TrafficStats& stats() const noexcept { return stats_; }
 
  private:
-  [[nodiscard]] TrafficPlan planRoute(const robots::Robot& robot);
+  [[nodiscard]] TrafficPlan planAndRecord(const robots::Robot& robot, bool again);
+  [[nodiscard]] TrafficPlan planRoute(const robots::Robot& robot, bool again);
+  // Reserves the robot's forecast route set off by the smallest delay (up to six steps) at which it
+  // fits; returns the delay, or 0 and reserves nothing if there is none.
+  [[nodiscard]] std::size_t reserveDelayed(const robots::Robot& robot);
 
   ReservationTable table_;
   // Every cell on the remaining route of each robot planned so far this step, however far ahead.
-  std::unordered_set<core::Point, core::PointHash> routes_;
+  std::unordered_map<core::Point, std::uint32_t, core::PointHash>
+      routes_;                          // cell -> routes through it
+  std::vector<core::Point> lastRoute_;  // what the robot planned last added to routes_
   std::size_t horizon_;
   core::Tick now_ = 0;
   bool began_ = false;
   std::optional<core::RobotId> lastPlanned_;
+  std::vector<std::uint32_t> rank_;  // by robot id: 1 plans first
   TrafficStats stats_;
 };
 

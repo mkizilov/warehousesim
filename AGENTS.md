@@ -28,9 +28,9 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `core`       | points, ids, clock, deterministic RNG                 | std only                             |
 | `world`      | grid model: cell types, static layout, robot occupancy (cell plus claimed cells), predefined layouts | core |
 | `robots`     | robot entity: pose, motion model, battery, task, path, state machine | core                  |
-| `planning`   | `PathPlanner` interface, A* with options, results, reused workspace | core, world            |
+| `planning`   | `PathPlanner` interface, A* with options, results, reused workspace; space-time A* (`SpaceTimeAStar`) behind a `SpaceTimeConstraints` interface | core, world |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
-| `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance) | core, world, robots |
+| `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `view`       | camera, scene (draw list), interpolation, input -> view logic; no SDL | core, world, simulation |
@@ -106,16 +106,31 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   because `Simulation` only lets a robot drive into cells it has claimed in `World` (one holder per cell);
   `traffic` only decides, ahead of time, how many cells a robot may claim this step. Never let the table
   grant a cell the world refuses, never make safety depend on it, and keep `reservations = false` working.
-  `traffic` depends on `core`, `world` and `robots` only (its tests build into `warehousesim_traffic_tests`),
-  and must stay deterministic: conflicts are reported earliest step first, then lowest robot id, and robots
-  plan in ascending id order (planning out of order throws). The table copies the walkable cells when it is
-  built, so a `Simulation` that ever gets a layout-editing API must rebuild it. `robots::forecastHolds()`
+  `traffic` depends on `core`, `world`, `robots` and `planning` only (its tests build into
+  `warehousesim_traffic_tests`), and must stay deterministic: conflicts are reported earliest step first, then
+  lowest robot id, and robots plan in ascending id order (planning out of order throws). The table copies the
+  walkable cells when it is built, so the layout may only change through `Simulation::placeObstacle` and
+  `clearObstacle`, which rebuild it and repair the routes that cross the change. `robots::forecastHolds()`
   must keep using the robot's real motion code (`stepUnobstructed`), not an approximation of it. Anything
   that moves a robot other than on its own turn (`stepAside`) must tell the controller (`relocate`) and
   must use up that robot's step. Keep `CollisionAvoidancePropertyTest` and `TrafficAudit` (no overlap, no
   swap, at most a cell of movement per tick) green on every layout, and the demo-hall standstill test: a
   change to blocking or sidestepping rules is checked against many seeds, not one (the throughput of the
   demo hall varies by about +-3 tasks per 500 ticks between seeds, so single-seed comparisons mislead).
+- Cooperative planning is decoupled prioritized planning, and it only ever adds to the layers above it:
+  `cooperative = false` and `reservations = false` must keep working, and safety never depends on it.
+  `planning::SpaceTimeAStar` knows reservations only through `SpaceTimeConstraints` (so `planning` still
+  needs nothing but `core` and `world`; its tests are in `warehousesim_planning_tests`). Everything it
+  decides must be reproducible from the simulation state: search work is counted in node expansions, never
+  in time; priority is the robot id, changed only by the temporary boost that ends a deadlocked ring; ties
+  are broken by explicit keys, never by container or hash order. `CooperativeRouter` replaces a route only
+  if the old one cannot be followed or the new one is better, and within `maxDetourCells`/`maxDodgeCells`;
+  keep the per-step and per-search work limits honoured (`NoStepSpendsMoreSearchWorkThanItsLimit...`).
+  `ProgressMonitor` only observes: recovery (sidestep, boost, abandon) lives in `Simulation`
+  (`cooperation.cpp`). Known limits are pinned by tests named `...StaySafe` (safe and reported, not
+  solved); when one of them is ever solved, change that test and the "Limits" list in the README on purpose,
+  and do not relax `TrafficAudit` to make a scenario pass. Scenarios in `tests/cooperative_planning_test.cpp`
+  share helpers with `collision_avoidance_test.cpp` via `tests/scenario_support.hpp`.
 - Depend on interfaces at module seams (`PathPlanner`, `DistanceEstimator`, `Dispatcher`) and inject implementations through
   constructors. No global or singleton state.
 - Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them

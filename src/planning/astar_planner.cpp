@@ -83,6 +83,13 @@ std::optional<Path> AStarPlanner::findPath(const world::Warehouse& warehouse, Po
 
 SearchResult AStarPlanner::search(const world::Warehouse& warehouse, Point start, Point goal,
                                   const BlockedSet& blocked, Path& path) {
+  const SearchResult result = run(warehouse, start, goal, blocked, path);
+  expanded_ += result.expansions;
+  return result;
+}
+
+SearchResult AStarPlanner::run(const world::Warehouse& warehouse, Point start, Point goal,
+                               const BlockedSet& blocked, Path& path) {
   path.clear();
   if (!warehouse.isWalkable(start)) {
     return {SearchStatus::InvalidStart, 0, 0};

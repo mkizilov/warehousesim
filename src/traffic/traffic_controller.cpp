@@ -1,6 +1,7 @@
 #include "warehousesim/traffic/traffic_controller.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -53,6 +54,11 @@ std::vector<Request> toRequests(const std::vector<std::vector<Point>>& holds, St
   return requests;
 }
 
+// Standing still with nothing granted, so that it can hold off for a step and then set out.
+bool atRest(const Robot& robot) {
+  return robot.authority() == 0 && robot.speed() == 0.0 && robot.segmentProgress() == 0.0;
+}
+
 std::optional<std::size_t> indexInRoute(const std::vector<Point>& route, Point cell) {
   const auto it = std::find(route.begin(), route.end(), cell);
   if (it == route.end()) {
@@ -70,12 +76,32 @@ TrafficController::TrafficController(const world::Warehouse& warehouse, std::siz
   }
 }
 
-void TrafficController::beginStep(core::Tick now, std::span<const Robot> fleet) {
+void TrafficController::beginStep(core::Tick now, std::span<const Robot> fleet,
+                                  std::span<const RobotId> priority) {
   table_.clear();
   routes_.clear();
+  lastRoute_.clear();
   now_ = now;
   began_ = true;
   lastPlanned_.reset();
+
+  // Ranks: the position in `priority`, then everybody else by id.
+  std::uint32_t largest = 0;
+  for (const Robot& robot : fleet) {
+    largest = std::max(largest, robot.id().value);
+  }
+  rank_.assign(static_cast<std::size_t>(largest) + 1, 0);
+  std::uint32_t next = 1;
+  for (const RobotId id : priority) {
+    if (id.value <= largest && rank_[id.value] == 0) {
+      rank_[id.value] = next++;
+    }
+  }
+  for (std::uint32_t id = 1; id <= largest; ++id) {
+    if (rank_[id] == 0) {
+      rank_[id] = next++;
+    }
+  }
 
   for (const Robot& robot : fleet) {
     const std::vector<Point> holds = currentHolds(robot);
@@ -106,19 +132,55 @@ void TrafficController::relocate(const Robot& robot) {
   }
 }
 
-TrafficPlan TrafficController::plan(const Robot& robot) {
-  TrafficPlan result = planRoute(robot);
+TrafficPlan TrafficController::plan(const Robot& robot) { return planAndRecord(robot, false); }
+
+TrafficPlan TrafficController::replan(const Robot& robot) { return planAndRecord(robot, true); }
+
+TrafficPlan TrafficController::planAndRecord(const Robot& robot, bool again) {
+  if (again) {
+    if (!lastPlanned_ || *lastPlanned_ != robot.id()) {
+      throw std::logic_error("only the robot planned last can be planned again");
+    }
+    for (const Point cell : lastRoute_) {
+      if (--routes_[cell] == 0) {
+        routes_.erase(cell);
+      }
+    }
+  }
+  TrafficPlan result = planRoute(robot, again);
   // Only now, so that a robot never counts its own route against itself.
-  routes_.insert(robot.path().begin(), robot.path().end());
+  lastRoute_.assign(robot.path().begin(), robot.path().end());
+  for (const Point cell : lastRoute_) {
+    ++routes_[cell];
+  }
   return result;
 }
 
-TrafficPlan TrafficController::planRoute(const Robot& robot) {
+std::size_t TrafficController::reserveDelayed(const Robot& robot) {
+  const std::vector<std::vector<Point>> forecast = robots::forecastHolds(robot, horizon_);
+  const std::size_t longest = std::min<std::size_t>(horizon_ / 2, 6);
+  for (std::size_t delay = 1; delay <= longest; ++delay) {
+    std::vector<std::vector<Point>> holds(delay, std::vector<Point>{robot.position()});
+    holds.insert(holds.end(), forecast.begin(),
+                 forecast.begin() + static_cast<std::ptrdiff_t>(horizon_ - delay));
+    const std::vector<Request> requests = toRequests(holds, now_);
+    if (!table_.earliestConflict(robot.id(), requests)) {
+      (void)table_.reserveAll(robot.id(), requests);
+      return delay;
+    }
+  }
+  return 0;
+}
+
+TrafficPlan TrafficController::planRoute(const Robot& robot, bool replanning) {
   if (!began_) {
     throw std::logic_error("beginStep() must be called before planning");
   }
-  if (lastPlanned_ && !(robot.id() > *lastPlanned_)) {
-    throw std::logic_error("reservations must be made in ascending robot id order");
+  if (robot.id().value >= rank_.size()) {
+    throw std::logic_error("the robot was not part of this step");
+  }
+  if (!replanning && lastPlanned_ && !(rank_[robot.id().value] > rank_[lastPlanned_->value])) {
+    throw std::logic_error("reservations must be made in order of priority");
   }
   lastPlanned_ = robot.id();
   const RobotId id = robot.id();
@@ -186,6 +248,18 @@ TrafficPlan TrafficController::planRoute(const Robot& robot) {
         toRequests(robots::forecastHolds(robot.withRouteCutTo(keep), horizon_), now_);
     const std::optional<Conflict> again = table_.earliestConflict(id, cut);
     if (!again) {
+      // A robot at rest that cannot take its next cell this step or the next (somebody is on it, or
+      // about to be) reserves what it will do, which is to wait a little and then go, rather than
+      // to stand where it is for the whole horizon. The robots after it then see that it means to
+      // move off, and can get out of its way. A clash further off is not treated like this: waiting
+      // that out would only push it past the end of the horizon.
+      if (keep == 0 && atRest(robot) && first->step <= now_ + 1) {
+        result.delaySteps = reserveDelayed(robot);
+        if (result.delaySteps > 0) {
+          result.clearedCells = 0;
+          return result;
+        }
+      }
       (void)table_.reserveAll(id, cut);
       result.clearedCells = keep;
       return result;

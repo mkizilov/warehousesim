@@ -60,7 +60,8 @@ json toJson(const Snapshot& snapshot) {
          {"task", optionalIdToJson(robot.task)},
          {"path", pointsToJson(robot.path)},
          {"holds", pointsToJson(robot.holds)},
-         {"waiting", waitToJson(robot.waiting)}});
+         {"waiting", waitToJson(robot.waiting)},
+         {"stuckTicks", robot.stuckTicks}});
   }
   json tasksJson = json::array();
   for (const tasks::Task& task : snapshot.activeTasks) {
@@ -83,7 +84,23 @@ json toJson(const Snapshot& snapshot) {
                 {"vertexConflicts", snapshot.traffic.vertex},
                 {"swapConflicts", snapshot.traffic.swaps},
                 {"inTheWay", snapshot.traffic.inTheWay},
-                {"replans", snapshot.replans}}}};
+                {"replans", snapshot.replans}}},
+              {"planning",
+               {{"searches", snapshot.planning.searches},
+                {"reroutes", snapshot.planning.reroutes},
+                {"dodges", snapshot.planning.dodges},
+                {"partialPlans", snapshot.planning.partialPlans},
+                {"outOfBudget", snapshot.planning.outOfBudget},
+                {"deferred", snapshot.planning.deferred},
+                {"work", snapshot.planning.work},
+                {"peakStepWork", snapshot.planning.peakStepWork},
+                {"obstacleRepairs", snapshot.planning.obstacleRepairs},
+                {"prolongedBlocks", snapshot.planning.prolongedBlocks},
+                {"deadlocks", snapshot.planning.deadlocks},
+                {"deadlocksRecovered", snapshot.planning.deadlocksRecovered},
+                {"deadlocksUnresolved", snapshot.planning.deadlocksUnresolved},
+                {"priorityBoosts", snapshot.planning.priorityBoosts},
+                {"abandoned", snapshot.planning.abandoned}}}};
 }
 
 world::Warehouse warehouseFromJson(const json& document) {

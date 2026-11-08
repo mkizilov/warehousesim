@@ -21,6 +21,8 @@
 #include "warehousesim/tasks/task.hpp"
 #include "warehousesim/tasks/task_generator.hpp"
 #include "warehousesim/tasks/task_queue.hpp"
+#include "warehousesim/traffic/cooperative_router.hpp"
+#include "warehousesim/traffic/progress_monitor.hpp"
 #include "warehousesim/traffic/reservation_table.hpp"
 #include "warehousesim/traffic/traffic_controller.hpp"
 #include "warehousesim/world/world.hpp"
@@ -50,11 +52,63 @@ struct SimulationConfig {
   // way) apply either way.
   bool reservations = true;
   std::size_t reservationHorizon = traffic::TrafficController::kDefaultHorizon;
-  // A route asked for because of a reservation clash may be at most this many cells longer than
-  // the one it replaces (0: only one of the same length); otherwise the robot keeps waiting.
-  // Vehicles that stop at every corner lose more on a long detour than on a short wait: over 40
-  // seeds of the demo hall, 4 cells or fewer completed about 2% more tasks than 12 to 20.
+  // A route found because of a reservation clash may be at most this many cells longer than the
+  // one it replaces when that one could still be followed (0: only one of the same length);
+  // otherwise the robot keeps waiting. Vehicles that stop at every corner lose more on a long
+  // detour than on a short wait: over 40 seeds of the demo hall, 4 cells or fewer completed about
+  // 2% more tasks than 12 to 20.
   std::size_t maxDetourCells = 4;
+
+  // ---- cooperative planning (traffic::CooperativeRouter; needs `reservations`) ----
+  // A robot whose route the table holds back searches in space and time, in priority order,
+  // against the reservations of the robots before it, and takes the result if it gets there sooner
+  // than waiting would. This also lets a robot that is in somebody's way dodge, which the table
+  // alone cannot.
+  bool cooperative = true;
+  // How many cells longer a route may be when the old one could not be followed at all because the
+  // robot is in somebody's way (a dodge into a side cell and back costs two or more).
+  std::size_t maxDodgeCells = 12;
+  // Search work (see planning::SpaceTimeOptions::maxWork) all robots may spend in one step, and
+  // that one search may spend. When the step's share is used up the remaining searches wait for
+  // the next step, where the robots that were put off go first.
+  std::size_t planningWorkPerStep = 4000;
+  std::size_t planningWorkPerSearch = 1500;
+  // Ticks a robot waits before searching again after a search that did not change its route.
+  core::Tick replanInterval = 4;
+  // A robot that wants to move and does not for this many ticks is blocked for long: it is counted
+  // and its searches may use twice the work.
+  std::uint32_t prolongedBlockTicks = 20;
+  // Robots waiting for each other in a ring, all stuck for this long, are deadlocked. The first
+  // time round, the one with the lowest priority that has room is moved aside. If the ring is still
+  // there after as many ticks again, and again, the lowest-priority robot in it that has not had
+  // its turn is given the first place in the order of priority for priorityBoostTicks, so that the
+  // others have to make way for it.
+  std::uint32_t deadlockTicks = 6;
+  core::Tick priorityBoostTicks = 40;
+  // A robot stuck for this long gives up its task (back to the queue if not yet collected, failed
+  // if it carries cargo) so that it does not hold up the others for ever.
+  std::uint32_t abandonTicks = 150;
+};
+
+// What cooperative planning, blocking detection and recovery have done so far.
+struct PlanningStats {
+  std::uint64_t searches = 0;         // cooperative searches run
+  std::uint64_t reroutes = 0;         // routes replaced by one of them
+  std::uint64_t dodges = 0;           // ... of which the robot was in somebody's way
+  std::uint64_t partialPlans = 0;     // ... of which only reached the end of the window
+  std::uint64_t outOfBudget = 0;      // searches that ran out of their work
+  std::uint64_t deferred = 0;         // searches put off because the step's work was used up
+  std::uint64_t work = 0;             // cooperative search work in total
+  std::uint64_t peakStepWork = 0;     // most planning work, of any kind, in one step
+  std::uint64_t obstacleRepairs = 0;  // routes repaired after the layout changed
+  std::uint64_t prolongedBlocks = 0;  // robots stuck for prolongedBlockTicks
+  std::uint64_t deadlocks = 0;        // rings of robots waiting for each other, each counted once
+  std::uint64_t deadlocksRecovered = 0;   // ... that a robot was moved aside for
+  std::uint64_t deadlocksUnresolved = 0;  // ... that nobody had room to move out of
+  std::uint64_t priorityBoosts = 0;       // robots put first in the order of priority to end a ring
+  std::uint64_t abandoned = 0;            // tasks given up after abandonTicks
+
+  bool operator==(const PlanningStats&) const = default;
 };
 
 // What a robot that has been held back is waiting for.
@@ -94,6 +148,8 @@ struct RobotSnapshot {
   std::vector<core::Point> holds;
   // Set while the robot is standing still because a reservation or a robot is in its way.
   std::optional<RobotWait> waiting;
+  // Ticks in a row it has wanted to move and not moved.
+  std::uint32_t stuckTicks = 0;
   robots::MotionPhase motion = robots::MotionPhase::Stopped;
   bool carrying = false;         // holds cargo between loading and unloading
   std::uint64_t deliveries = 0;  // cargo handed over at dropoffs so far
@@ -124,6 +180,7 @@ struct Snapshot {
   // and routes asked for because a robot was held back.
   traffic::TrafficStats traffic;
   std::uint64_t replans = 0;
+  PlanningStats planning;
 
   bool operator==(const Snapshot&) const = default;
 };
@@ -159,6 +216,16 @@ class Simulation {
   bool disableRobot(core::RobotId id);
   bool restoreRobot(core::RobotId id);
 
+  // Puts up a wall or a shelf on a free floor cell, or takes one down, while the simulation runs.
+  // Refused (false) for a cell that is not a plain floor cell (or, for clearObstacle, not an
+  // obstacle), and for a cell a robot stands on or holds. On success the table and distance
+  // caches are rebuilt, open tasks that start or end on the cell are cancelled, and the route of
+  // every robot that went through it is repaired: through the shortest way round, or, if there is
+  // none, the robot's task goes back to the queue (not yet collected) or fails (cargo aboard).
+  // Throws std::invalid_argument if `type` is not an obstacle.
+  bool placeObstacle(core::Point cell, world::CellType type = world::CellType::Wall);
+  bool clearObstacle(core::Point cell);
+
   void step();
   void run(core::Tick ticks);
 
@@ -176,6 +243,7 @@ class Simulation {
     return traffic_.stats();
   }
   [[nodiscard]] std::uint64_t replans() const noexcept { return replans_; }
+  [[nodiscard]] const PlanningStats& planningStats() const noexcept { return planningStats_; }
   // What the table decided for a robot in the step just run.
   [[nodiscard]] const traffic::TrafficPlan& trafficPlan(core::RobotId id) const;
   [[nodiscard]] Snapshot snapshot() const;
@@ -198,16 +266,31 @@ class Simulation {
   // `timeToDrive` ticks and tells the robot about each; stops at the first cell somebody else
   // holds, or after `cleared` cells of the path (what the reservation table lets the robot have).
   void claimAhead(robots::Robot& robot, double timeToDrive, std::size_t cleared);
-  // Nobody is in the way, but the reservation table says the next cell is taken for now and the
-  // robot has waited long enough: ask the planner for a way round it. Returns true if it found one.
-  bool requestReplan(robots::Robot& robot, const traffic::TrafficPlan& plan);
   // Gives back every claimed cell beyond what the robot has been granted.
   void syncHolds(robots::Robot& robot);
   bool resolveBlock(robots::Robot& robot, core::Point cell);
-  bool stepAside(robots::Robot& robot);
+  // `a` has priority over `b`: a boosted robot over one that is not, otherwise the lower id.
+  [[nodiscard]] bool outranks(core::RobotId a, core::RobotId b) const;
+  // Moves the robot to a free neighbouring cell, one that `pusher`'s route does not need if there
+  // is one. False if there is none, or the robot has been moved this step already.
+  bool stepAside(robots::Robot& robot, const robots::Robot* pusher = nullptr);
   [[nodiscard]] planning::BlockedSet occupiedCells() const;
-  bool tryRepath(robots::Robot& robot, const planning::BlockedSet& blocked,
-                 std::optional<std::size_t> maxExtraCells = std::nullopt);
+  bool tryRepath(robots::Robot& robot, const planning::BlockedSet& blocked);
+
+  // ---- cooperative planning, supervision and recovery (cooperation.cpp) ----
+  void beginPlanning();
+  // The robot has just been planned by the table. If that held it back, searches for a better
+  // route within this step's work and returns the plan to follow.
+  traffic::TrafficPlan cooperate(robots::Robot& robot, const traffic::TrafficPlan& plan);
+  [[nodiscard]] planning::BlockedSet stationaryCells(core::RobotId except) const;
+  void recordProgress(const robots::Robot& robot, const traffic::TrafficPlan& plan);
+  // After all robots have moved: stuck robots, deadlocks, giving up.
+  void supervise();
+  bool recoverDeadlock(const std::vector<core::RobotId>& ring);
+  void boostOneOf(const std::vector<core::RobotId>& ring);
+  void abandon(robots::Robot& robot);
+  void repairRoutes();
+  void rebuildTraffic();
   bool retargetCharger(robots::Robot& robot);
   void releaseTask(robots::Robot& robot);
   void failTask(robots::Robot& robot);
@@ -222,7 +305,23 @@ class Simulation {
   traffic::TrafficController traffic_;
   std::vector<traffic::TrafficPlan> plans_;  // by robot, from the step just run
   std::vector<bool> displaced_;              // by robot: moved aside during the current step
+  std::vector<bool> movedThisStep_;          // by robot: changed cell or was driving this step
   std::uint64_t replans_ = 0;
+  traffic::CooperativeRouter router_;
+  traffic::ProgressMonitor progress_{0};
+  PlanningStats planningStats_;
+  // By robot (index id - 1): when it may search again, how many steps in a row it was put off,
+  // the factor on its search work after running out of it, whether it holds a reserved share of
+  // this step's work, and whether its current deadlock ring has been counted.
+  std::vector<core::Tick> nextSearch_;
+  std::vector<core::Tick> boostUntil_;  // by robot: has first priority until this tick
+  std::vector<std::uint32_t> deferred_;
+  std::vector<std::uint32_t> workScale_;
+  std::vector<bool> reservedShare_;
+  std::vector<std::vector<core::RobotId>> ringsLastStep_;
+  std::size_t workPool_ = 0;       // search work left for robots without a reserved share
+  std::uint64_t stepWork_ = 0;     // planning work so far in the current step
+  std::uint64_t plannerBase_ = 0;  // the planner's work total when the step began
   std::unique_ptr<planning::PathPlanner> planner_;
   std::unique_ptr<tasks::Dispatcher> dispatcher_;
   std::optional<tasks::TaskGenerator> generator_;

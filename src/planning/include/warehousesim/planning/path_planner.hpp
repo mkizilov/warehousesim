@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <unordered_set>
 #include <vector>
@@ -31,6 +32,10 @@ class PathPlanner {
   [[nodiscard]] virtual std::optional<Path> findPath(const world::Warehouse& warehouse,
                                                      core::Point start, core::Point goal,
                                                      const BlockedSet& blocked) = 0;
+
+  // A running total of the work this planner has done (for A*, cells expanded), so that a caller
+  // can tell how much planning a stretch of simulation cost. A planner that does not count says 0.
+  [[nodiscard]] virtual std::uint64_t work() const noexcept { return 0; }
 };
 
 }  // namespace warehousesim::planning

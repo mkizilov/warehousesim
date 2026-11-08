@@ -5,6 +5,7 @@ function(warehousesim_add_test name)
   cmake_parse_arguments(ARG "" "" "SOURCES;LIBS" ${ARGN})
   add_executable(${name} ${ARG_SOURCES})
   target_link_libraries(${name} PRIVATE ${ARG_LIBS} GTest::gtest_main)
+  target_include_directories(${name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")  # scenario_support.hpp
   if(MSVC)
     target_compile_options(${name} PRIVATE /W4)
   else()
@@ -34,6 +35,7 @@ warehousesim_add_test(warehousesim_planning_tests
     astar_reference_test.cpp
     astar_scenarios_test.cpp
     planning_test.cpp
+    space_time_astar_test.cpp
   LIBS warehousesim::planning warehousesim::testing)
 
 # Counts heap allocations by replacing operator new in this executable, so it is not built under
@@ -54,10 +56,12 @@ warehousesim_add_test(warehousesim_robot_tests
     robots_test.cpp
   LIBS warehousesim::robots)
 
-# The space-time reservation table and the traffic controller need the grid and robots but no
-# planner, tasks, simulation, rendering or SDL.
+# The reservation table, traffic controller, cooperative router and progress monitor need the grid,
+# robots and the planner but no tasks, simulation, rendering or SDL.
 warehousesim_add_test(warehousesim_traffic_tests
   SOURCES
+    cooperative_router_test.cpp
+    progress_monitor_test.cpp
     reservation_table_test.cpp
     traffic_controller_test.cpp
   LIBS warehousesim::traffic)
@@ -78,6 +82,7 @@ warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
     collision_avoidance_test.cpp
+    cooperative_planning_test.cpp
     interpolation_test.cpp
     movement_test.cpp
     runner_test.cpp
