@@ -1,0 +1,34 @@
+---
+# Curated rather than "everything": the CI tidy job fails on any finding, so every enabled
+# check must be one we are willing to keep clean.
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  concurrency-*,
+  performance-*,
+  misc-definitions-in-headers,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  misc-throw-by-value-catch-by-reference,
+  misc-unused-alias-decls,
+  misc-unused-using-decls,
+  modernize-deprecated-headers,
+  modernize-loop-convert,
+  modernize-make-unique,
+  modernize-pass-by-value,
+  modernize-redundant-void-arg,
+  modernize-use-emplace,
+  modernize-use-equals-default,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-using,
+  readability-container-size-empty,
+  readability-redundant-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-switch-missing-default-case,
+  -bugprone-unchecked-optional-access
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*/warehousesim/(core|world|robots|planning|tasks|simulation|rendering)/.*'
+FormatStyle: file

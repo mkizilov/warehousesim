@@ -15,3 +15,91 @@
 - End each turn with a short summary of changes, checks actually run, remaining limitations, and commit hash. The orchestrator will provide the next prompt only after this turn ends.
 
 Extend this file with the project's language-specific architecture and verification commands while retaining these boundaries.
+
+## WarehouseSim (C++20) architecture and engineering rules
+
+### Layout and dependency direction
+
+Each module is a static library `warehousesim::<module>` in `src/<module>/`, with public headers under
+`src/<module>/include/warehousesim/<module>/` and sources next to them. Dependencies only point inward:
+
+| Module       | Responsibility                                        | May depend on                        |
+|--------------|-------------------------------------------------------|--------------------------------------|
+| `core`       | points, ids, clock, deterministic RNG                 | std only                             |
+| `world`      | warehouse grid and cell types                         | core                                 |
+| `robots`     | robot state and movement along a path                 | core                                 |
+| `planning`   | `PathPlanner` interface, A*                           | core, world                          |
+| `tasks`      | task lifecycle, assignment, task generation           | core, robots                         |
+| `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
+| `rendering`  | SDL3 window and drawing (GUI only)                    | core, world, simulation, SDL3        |
+
+`apps/cli` (headless) and `apps/gui` (SDL3) are thin `main()`s. Tests are in `tests/`.
+
+### Clean architecture
+
+- Inner modules never include outer ones; the build enforces this through `target_link_libraries`. Do not
+  add a link just to reach a header — move the type inward instead.
+- Only `simulation` knows about JSON, and only `rendering` (private) knows about SDL. The simulation
+  library, CLI and all tests except `viewport_test.cpp` must build and run with no display and no SDL.
+- Depend on interfaces at module seams (`PathPlanner`, `TaskAssigner`) and inject implementations through
+  constructors. No global or singleton state.
+- Keep rendering logic that can be pure (e.g. `Viewport`) free of SDL types so it can be unit-tested.
+
+### Deterministic tests and behaviour
+
+- Same warehouse, seed, config and inputs must give the same state after the same number of ticks.
+- Randomness comes only from `core::Rng` with an explicit seed. Do not use `std::rand`, `std::random_device`,
+  `std::*_distribution`, or unordered-container iteration order to make decisions.
+- Simulated time is `core::Tick` / `SimClock`. Simulation logic never reads wall-clock time; only
+  `SimulationRunner` and the GUI sleep.
+- Tests must not depend on real time for correctness. Threaded tests wait on `waitForTick` (with a
+  generous timeout), never on fixed sleeps; sleeps are allowed only to check that something does *not* happen.
+- Tests are not allowed to touch the network, the display, or files outside the build tree.
+- Fix bugs by adding a regression test first or alongside. Never weaken or delete a test to make it pass.
+
+### Memory safety and resource cleanup
+
+- RAII everywhere: `std::unique_ptr`, containers, `std::scoped_lock`/`unique_lock`. No raw `new`/`delete`,
+  no `malloc`, no manual `SDL_Destroy*` outside the deleters in `rendering/sdl_window.cpp`.
+- No owning raw pointers, no `const_cast`, no C-style casts, no uninitialised members. Use `std::span`,
+  `std::optional` and `std::string_view` instead of pointer+length pairs.
+- Validate at boundaries (constructors, `fromRows`, JSON, CLI arguments) by throwing or returning
+  `std::optional`; do not re-check invariants the types already guarantee.
+- Every thread is joined before its owner is destroyed (`SimulationRunner::~SimulationRunner`). Shared state is
+  guarded by one mutex; readers get value-copy `Snapshot`s.
+- SDL init/quit, window and renderer lifetimes are owned by `SdlWindow` and unwind correctly if
+  construction throws.
+- Code must compile warning-free with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion`
+  and stay clean under AddressSanitizer, UBSan and ThreadSanitizer.
+
+### Style
+
+- `.clang-format` (Google-based, 100 columns) is authoritative; run `clang-format -i` on changed files.
+- `.clang-tidy` is curated; fix findings rather than adding `NOLINT`, and justify any `NOLINT` inline.
+- Public headers use `#pragma once`, are self-contained, and expose the minimum needed.
+
+### Verification after every change
+
+Run from the repository root (dependencies are fetched by CMake at pinned versions or found on the system;
+keep all build trees under `build/`, which is git-ignored):
+
+```sh
+cmake --preset default                  # Debug + SDL3 GUI + tests, warnings as errors
+cmake --build --preset default
+ctest --preset default
+build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
+SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # GUI smoke test, no window
+cmake --preset asan && cmake --build --preset asan && ctest --preset asan   # ASan + UBSan
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan   # ThreadSanitizer
+cmake --preset tidy && cmake --build --preset tidy                          # clang-tidy
+find src apps tests \( -name '*.cpp' -o -name '*.hpp' \) | xargs clang-format --dry-run --Werror
+```
+
+Use `--preset headless` when SDL3 cannot be built or fetched. Report any check you could not run, and why,
+rather than skipping it silently. CI (`.github/workflows/ci.yml`) runs the same checks.
+
+### Dependencies
+
+Pinned in `cmake/WarehouseSimDependencies.cmake` (found via `find_package` first, otherwise fetched):
+nlohmann_json 3.12.0, GoogleTest 1.17.0, SDL3 3.2.0. Install tools only inside this repository (`.tools/`,
+`.venv/`); never globally. Do not add a dependency for a few lines of code.
