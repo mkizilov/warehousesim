@@ -3,22 +3,19 @@
 #include <memory>
 #include <string>
 
-#include "warehousesim/simulation/simulation.hpp"
-#include "warehousesim/world/warehouse.hpp"
+#include "warehousesim/view/camera.hpp"
+#include "warehousesim/view/draw_list.hpp"
+#include "warehousesim/view/view_controller.hpp"
 
 namespace warehousesim::rendering {
 
-struct InputEvents {
-  bool quit = false;
-  bool togglePause = false;
-};
-
 // RAII wrapper for an SDL3 window and renderer. SDL types stay out of this header, and
-// everything is released in reverse order of creation, including when the constructor
-// throws part-way through.
+// everything is released in reverse order of creation (renderer, window, then SDL itself),
+// including when the constructor throws part-way through. Must be used from the thread that
+// created it (SDL's main-thread rule).
 class SdlWindow {
  public:
-  // Throws std::runtime_error with SDL's error text if initialisation fails.
+  // Creates a resizable window. Throws std::runtime_error with SDL's error text on failure.
   SdlWindow(const std::string& title, int width, int height);
   ~SdlWindow();
 
@@ -27,11 +24,16 @@ class SdlWindow {
   SdlWindow(SdlWindow&&) = delete;
   SdlWindow& operator=(SdlWindow&&) = delete;
 
-  // Escape or closing the window requests quit; Space requests a pause toggle.
-  [[nodiscard]] InputEvents pollEvents();
+  // Drains the SDL event queue and returns what the user did, in render-pixel coordinates.
+  // Closing the window or pressing Escape sets `quit`.
+  [[nodiscard]] view::InputEvents pollEvents();
 
-  // Renders one frame. Throws std::runtime_error if SDL reports a drawing error.
-  void draw(const world::Warehouse& warehouse, const simulation::Snapshot& snapshot, bool paused);
+  // Current drawable size in render pixels; changes when the window is resized.
+  [[nodiscard]] view::ScreenSize renderSize() const;
+
+  // Executes the commands in order and presents the frame. Throws std::runtime_error if SDL
+  // reports a drawing error.
+  void draw(const view::DrawList& list);
 
  private:
   struct Impl;

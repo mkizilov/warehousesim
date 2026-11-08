@@ -1,14 +1,25 @@
 #include "warehousesim/simulation/runner.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
 namespace warehousesim::simulation {
 
-SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds tickInterval)
+namespace {
+
+using SteadyClock = std::chrono::steady_clock;
+using Seconds = std::chrono::duration<double>;
+
+// Never spin: even if a step is already due, give other threads a moment on the mutex.
+constexpr Seconds kMinSleep{0.0002};
+
+}  // namespace
+
+SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration)
     : simulation_(std::move(simulation)),
       warehouse_(simulation_.warehouse()),
-      interval_(tickInterval),
+      stepper_(std::chrono::duration_cast<Seconds>(stepDuration).count()),
       latest_(simulation_.snapshot()) {}
 
 SimulationRunner::~SimulationRunner() { stop(); }
@@ -40,8 +51,23 @@ void SimulationRunner::setPaused(bool paused) {
   {
     const std::scoped_lock lock(mutex_);
     paused_ = paused;
+    ++controlEpoch_;
   }
   wake_.notify_all();
+}
+
+void SimulationRunner::setSpeed(double speed) {
+  {
+    const std::scoped_lock lock(mutex_);
+    stepper_.setSpeed(speed);
+    ++controlEpoch_;
+  }
+  wake_.notify_all();
+}
+
+double SimulationRunner::speed() const {
+  const std::scoped_lock lock(mutex_);
+  return stepper_.speed();
 }
 
 Snapshot SimulationRunner::snapshot() const {
@@ -60,20 +86,49 @@ bool SimulationRunner::shouldStep() const {
 
 void SimulationRunner::loop() {
   std::unique_lock lock(mutex_);
+  bool running = false;
+  SteadyClock::time_point last;
   while (true) {
-    wake_.wait(lock, [this] { return stopRequested_ || shouldStep(); });
+    if (!shouldStep()) {
+      running = false;
+      wake_.wait(lock, [this] { return stopRequested_ || shouldStep(); });
+    }
     if (stopRequested_) {
       return;
     }
-    // Sleep one interval, waking early if stopped or paused in the meantime.
-    const bool interrupted =
-        wake_.wait_for(lock, interval_, [this] { return stopRequested_ || paused_; });
-    if (interrupted) {
+    if (!running) {
+      // Time spent paused (or finished) must not be replayed as a burst of steps.
+      stepper_.reset();
+      last = SteadyClock::now();
+      running = true;
+    }
+
+    // Sleep until the next step is due, waking early if stopped, paused or re-speeded.
+    const std::uint64_t epoch = controlEpoch_;
+    const Seconds sleep = std::max(kMinSleep, Seconds(stepper_.secondsUntilNextStep()));
+    wake_.wait_for(lock, std::chrono::duration_cast<SteadyClock::duration>(sleep),
+                   [&] { return stopRequested_ || controlEpoch_ != epoch; });
+    if (stopRequested_) {
+      return;
+    }
+
+    const SteadyClock::time_point now = SteadyClock::now();
+    const Seconds elapsed = now - last;
+    last = now;
+    if (paused_) {
       continue;
     }
-    simulation_.step();
-    latest_ = simulation_.snapshot();
-    published_.notify_all();
+    std::uint32_t due = stepper_.advance(elapsed.count());
+    bool stepped = false;
+    while (due > 0 && shouldStep()) {
+      simulation_.step();
+      stepped = true;
+      --due;
+    }
+    if (stepped) {
+      latest_ = simulation_.snapshot();
+      published_.notify_all();
+    }
   }
 }
 

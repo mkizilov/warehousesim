@@ -30,5 +30,5 @@ Checks: >
   -bugprone-switch-missing-default-case,
   -bugprone-unchecked-optional-access
 WarningsAsErrors: ''
-HeaderFilterRegex: '.*/warehousesim/(core|world|robots|planning|tasks|simulation|rendering)/.*'
+HeaderFilterRegex: '.*/warehousesim/(core|world|robots|planning|tasks|simulation|view|rendering)/.*'
 FormatStyle: file

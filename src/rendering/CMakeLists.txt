@@ -1,6 +1,6 @@
 warehousesim_add_module(rendering
-  SOURCES sdl_window.cpp viewport.cpp
-  PUBLIC_DEPS warehousesim::core warehousesim::world warehousesim::simulation
+  SOURCES sdl_window.cpp
+  PUBLIC_DEPS warehousesim::view
   PRIVATE_DEPS SDL3::SDL3)
 
 # Treat SDL's headers as system headers so our strict warnings never apply to them.

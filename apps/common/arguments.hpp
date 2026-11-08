@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cerrno>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -34,6 +37,37 @@ inline bool readUnsignedOption(int argc, char** argv, int& index, std::string_vi
     return false;
   }
   const auto parsed = parseUnsigned(argv[index + 1]);
+  if (!parsed) {
+    failed = true;
+    return false;
+  }
+  out = *parsed;
+  ++index;
+  return true;
+}
+
+// Parses a finite decimal number; the whole text must be consumed. (std::from_chars for
+// floating point is not available in every supported standard library.)
+[[nodiscard]] inline std::optional<double> parseDouble(const std::string& text) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  char* end = nullptr;
+  errno = 0;
+  const double value = std::strtod(text.c_str(), &end);
+  if (errno != 0 || end != text.c_str() + text.size() || !std::isfinite(value)) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+// Same contract as readUnsignedOption, for options taking a decimal number.
+inline bool readDoubleOption(int argc, char** argv, int& index, std::string_view name, double& out,
+                             bool& failed) {
+  if (std::string_view(argv[index]) != name) {
+    return false;
+  }
+  const auto parsed = index + 1 < argc ? parseDouble(argv[index + 1]) : std::nullopt;
   if (!parsed) {
     failed = true;
     return false;

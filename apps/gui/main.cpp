@@ -1,5 +1,8 @@
-// Graphical runner: the simulation steps on a worker thread, this thread renders with SDL3.
-// Space pauses/resumes, Escape quits.
+// Graphical runner. The simulation steps on a worker thread with a fixed timestep; this thread
+// reads input, draws frames and paces itself to --fps. Frame rate never affects the simulation.
+//
+//   Space pause/resume   [ ] slower/faster   wheel or +/- zoom   drag or arrows/WASD pan
+//   0 fit the whole warehouse   Esc quit
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -9,15 +12,27 @@
 #include <utility>
 
 #include "arguments.hpp"
+#include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/rendering/sdl_window.hpp"
 #include "warehousesim/simulation/runner.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
+#include "warehousesim/view/scene.hpp"
+#include "warehousesim/view/view_controller.hpp"
 
 namespace {
 
+using Clock = std::chrono::steady_clock;
+
+constexpr std::uint64_t kMaxTickMs = 60000;
+constexpr std::uint64_t kMaxFps = 1000;
+
 void printUsage(std::ostream& out) {
-  out << "usage: warehousesim_gui [--seed N] [--tick-ms N] [--frames N] [--layout NAME]\n"
-         "  --frames N  exit after N rendered frames (0 = run until closed)\n"
+  out << "usage: warehousesim_gui [--seed N] [--layout NAME] [--tick-ms N] [--speed X]\n"
+         "                        [--fps N] [--frames N]\n"
+         "  --tick-ms N  fixed simulation step, in real milliseconds at speed 1 (default 100)\n"
+         "  --speed X    initial playback speed multiplier, 0.0625 to 64 (default 1)\n"
+         "  --fps N      frame rate cap, 1 to 1000 (default 60)\n"
+         "  --frames N   exit after N rendered frames (0 = run until closed)\n"
          "  layouts: "
       << warehousesim::apps::layoutNames() << " (default: demo)\n";
 }
@@ -27,19 +42,25 @@ void printUsage(std::ostream& out) {
 int main(int argc, char** argv) {
   std::uint64_t seed = 1;
   std::uint64_t tickMs = 100;
+  std::uint64_t fps = 60;
   std::uint64_t maxFrames = 0;
+  double speed = 1.0;
   std::string layout = "demo";
   bool failed = false;
   for (int i = 1; i < argc && !failed; ++i) {
     if (warehousesim::apps::readUnsignedOption(argc, argv, i, "--seed", seed, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--tick-ms", tickMs, failed) ||
+        warehousesim::apps::readUnsignedOption(argc, argv, i, "--fps", fps, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--frames", maxFrames, failed) ||
+        warehousesim::apps::readDoubleOption(argc, argv, i, "--speed", speed, failed) ||
         warehousesim::apps::readStringOption(argc, argv, i, "--layout", layout, failed)) {
       continue;
     }
     failed = true;
   }
-  if (failed) {
+  if (failed || tickMs == 0 || tickMs > kMaxTickMs || fps == 0 || fps > kMaxFps ||
+      !(speed >= warehousesim::core::FixedTimestep::kMinSpeed &&
+        speed <= warehousesim::core::FixedTimestep::kMaxSpeed)) {
     printUsage(std::cerr);
     return 2;
   }
@@ -50,26 +71,46 @@ int main(int argc, char** argv) {
       printUsage(std::cerr);
       return 2;
     }
+
+    // Declaration order matters for shutdown: the window (and SDL) is torn down before the
+    // runner, and the runner's destructor joins its thread even if we leave through an exception.
     warehousesim::simulation::SimulationRunner runner(
         std::move(*simulation),
         std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)));
     warehousesim::rendering::SdlWindow window("WarehouseSim", 960, 600);
+    warehousesim::view::ViewController controller(window.renderSize(), runner.warehouse().size(),
+                                                  speed);
+    runner.setSpeed(controller.speed());
     runner.start();
 
-    bool paused = false;
+    const auto frameBudget = std::chrono::duration_cast<Clock::duration>(
+        std::chrono::duration<double>(1.0 / static_cast<double>(fps)));
+    auto previousFrame = Clock::now();
     std::uint64_t frames = 0;
     while (maxFrames == 0 || frames < maxFrames) {
+      const auto frameStart = Clock::now();
+      const double frameSeconds = std::chrono::duration<double>(frameStart - previousFrame).count();
+      previousFrame = frameStart;
+
       const auto input = window.pollEvents();
       if (input.quit) {
         break;
       }
+      controller.resize(window.renderSize());
+      controller.apply(input, frameSeconds);
       if (input.togglePause) {
-        paused = !paused;
-        runner.setPaused(paused);
+        runner.setPaused(controller.paused());
       }
-      window.draw(runner.warehouse(), runner.snapshot(), paused);
+      if (input.speedSteps != 0) {
+        runner.setSpeed(controller.speed());
+      }
+
+      const warehousesim::view::ViewStatus status{controller.paused(), controller.speed(),
+                                                  controller.pointer()};
+      window.draw(warehousesim::view::buildScene(runner.warehouse(), runner.snapshot(),
+                                                 controller.camera(), status));
       ++frames;
-      std::this_thread::sleep_for(std::chrono::milliseconds(16));
+      std::this_thread::sleep_until(frameStart + frameBudget);
     }
     runner.stop();
   } catch (const std::exception& error) {

@@ -27,16 +27,21 @@ warehousesim_add_test(warehousesim_world_tests
     world_model_test.cpp
   LIBS warehousesim::world)
 
+# Camera, scene and view-controller tests need no SDL or display, so they build and run even
+# when WAREHOUSESIM_BUILD_GUI is OFF.
 warehousesim_add_test(warehousesim_tests
   SOURCES
+    camera_test.cpp
     planning_test.cpp
     robots_test.cpp
     runner_test.cpp
+    scene_test.cpp
     simulation_test.cpp
     tasks_test.cpp
-  LIBS warehousesim::simulation)
+    view_controller_test.cpp
+  LIBS warehousesim::view warehousesim::simulation)
 
-if(TARGET warehousesim::rendering)
-  target_sources(warehousesim_tests PRIVATE viewport_test.cpp)
-  target_link_libraries(warehousesim_tests PRIVATE warehousesim::rendering)
-endif()
+# The simulation must run with no window, display or SDL: the CLI does not link any of them.
+add_test(NAME headless_cli_all_layouts
+  COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:warehousesim_cli>
+          -P ${CMAKE_SOURCE_DIR}/cmake/RunHeadlessCli.cmake)

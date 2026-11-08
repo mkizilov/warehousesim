@@ -3,59 +3,35 @@
 #include <SDL3/SDL.h>
 
 #include <stdexcept>
-
-#include "warehousesim/rendering/viewport.hpp"
+#include <variant>
 
 namespace warehousesim::rendering {
 
+using view::Color;
+using view::DrawCommand;
+using view::DrawList;
+using view::FillRect;
+using view::InputEvents;
+using view::Line;
+using view::ScreenPoint;
+using view::ScreenRect;
+using view::ScreenSize;
+using view::Text;
+
 namespace {
-
-struct Color {
-  Uint8 r;
-  Uint8 g;
-  Uint8 b;
-};
-
-constexpr Color kBackground{24, 26, 32};
-constexpr Color kPendingTask{240, 210, 60};
-constexpr Color kActiveTask{90, 200, 230};
-constexpr Color kPauseIcon{255, 255, 255};
-
-Color cellColor(world::CellType type) {
-  switch (type) {
-    case world::CellType::Free:
-      return {44, 48, 58};
-    case world::CellType::Wall:
-      return {100, 100, 110};
-    case world::CellType::Shelf:
-      return {140, 100, 60};
-    case world::CellType::Pickup:
-      return {170, 140, 40};
-    case world::CellType::Dropoff:
-      return {60, 160, 90};
-    case world::CellType::Charging:
-      return {130, 90, 190};
-  }
-  return kBackground;
-}
-
-Color robotColor(robots::RobotStatus status) {
-  switch (status) {
-    case robots::RobotStatus::Idle:
-      return {80, 140, 240};
-    case robots::RobotStatus::ToPickup:
-      return {240, 150, 40};
-    case robots::RobotStatus::ToDropoff:
-      return {220, 70, 100};
-  }
-  return kBackground;
-}
 
 [[noreturn]] void throwSdlError(const char* what) {
   throw std::runtime_error(std::string(what) + ": " + SDL_GetError());
 }
 
-SDL_FRect toSdl(const Rect& rect) { return {rect.x, rect.y, rect.width, rect.height}; }
+SDL_FRect toSdl(const ScreenRect& rect) {
+  return {static_cast<float>(rect.x), static_cast<float>(rect.y), static_cast<float>(rect.width),
+          static_cast<float>(rect.height)};
+}
+
+bool isMouseEvent(Uint32 type) {
+  return type == SDL_EVENT_MOUSE_MOTION || type == SDL_EVENT_MOUSE_WHEEL;
+}
 
 }  // namespace
 
@@ -78,16 +54,33 @@ struct SdlWindow::Impl {
                                                                          &SDL_DestroyRenderer};
 
   void setColor(Color color) const {
-    if (!SDL_SetRenderDrawColor(renderer.get(), color.r, color.g, color.b, SDL_ALPHA_OPAQUE)) {
+    if (!SDL_SetRenderDrawColor(renderer.get(), color.r, color.g, color.b, color.a)) {
       throwSdlError("SDL_SetRenderDrawColor failed");
     }
   }
 
-  void fill(Color color, const Rect& rect) const {
-    setColor(color);
-    const SDL_FRect sdlRect = toSdl(rect);
-    if (!SDL_RenderFillRect(renderer.get(), &sdlRect)) {
+  void execute(const FillRect& command) const {
+    setColor(command.color);
+    const SDL_FRect rect = toSdl(command.rect);
+    if (!SDL_RenderFillRect(renderer.get(), &rect)) {
       throwSdlError("SDL_RenderFillRect failed");
+    }
+  }
+
+  void execute(const Line& command) const {
+    setColor(command.color);
+    if (!SDL_RenderLine(renderer.get(), static_cast<float>(command.from.x),
+                        static_cast<float>(command.from.y), static_cast<float>(command.to.x),
+                        static_cast<float>(command.to.y))) {
+      throwSdlError("SDL_RenderLine failed");
+    }
+  }
+
+  void execute(const Text& command) const {
+    setColor(command.color);
+    if (!SDL_RenderDebugText(renderer.get(), static_cast<float>(command.position.x),
+                             static_cast<float>(command.position.y), command.text.c_str())) {
+      throwSdlError("SDL_RenderDebugText failed");
     }
   }
 };
@@ -110,56 +103,90 @@ InputEvents SdlWindow::pollEvents() {
   InputEvents result;
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
-    if (event.type == SDL_EVENT_QUIT) {
-      result.quit = true;
-    } else if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
-      if (event.key.key == SDLK_ESCAPE) {
+    // Mouse positions arrive in window units; the camera works in the pixels we draw in.
+    if (isMouseEvent(event.type) &&
+        !SDL_ConvertEventToRenderCoordinates(impl_->renderer.get(), &event)) {
+      throwSdlError("SDL_ConvertEventToRenderCoordinates failed");
+    }
+
+    switch (event.type) {
+      case SDL_EVENT_QUIT:
         result.quit = true;
-      } else if (event.key.key == SDLK_SPACE) {
-        result.togglePause = !result.togglePause;
+        break;
+      case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+        result.pointer.reset();
+        result.pointerLeft = true;
+        break;
+      case SDL_EVENT_MOUSE_MOTION: {
+        result.pointer = ScreenPoint{event.motion.x, event.motion.y};
+        result.pointerLeft = false;
+        const Uint32 dragButtons = SDL_BUTTON_LMASK | SDL_BUTTON_MMASK | SDL_BUTTON_RMASK;
+        if ((event.motion.state & dragButtons) != 0) {
+          result.dragX += event.motion.xrel;
+          result.dragY += event.motion.yrel;
+        }
+        break;
       }
+      case SDL_EVENT_MOUSE_WHEEL: {
+        const float direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0F : 1.0F;
+        result.zoomSteps += static_cast<double>(event.wheel.y * direction);
+        result.zoomAnchor = ScreenPoint{event.wheel.mouse_x, event.wheel.mouse_y};
+        result.pointer = result.zoomAnchor;
+        result.pointerLeft = false;
+        break;
+      }
+      case SDL_EVENT_KEY_DOWN: {
+        const SDL_Keycode key = event.key.key;
+        if (key == SDLK_EQUALS || key == SDLK_PLUS || key == SDLK_KP_PLUS) {
+          result.zoomSteps += 1.0;  // auto-repeat gives smooth zooming while held
+        } else if (key == SDLK_MINUS || key == SDLK_KP_MINUS) {
+          result.zoomSteps -= 1.0;
+        } else if (event.key.repeat) {
+          break;
+        } else if (key == SDLK_ESCAPE) {
+          result.quit = true;
+        } else if (key == SDLK_SPACE) {
+          result.togglePause = !result.togglePause;
+        } else if (key == SDLK_0 || key == SDLK_KP_0) {
+          result.resetView = true;
+        } else if (key == SDLK_LEFTBRACKET) {
+          --result.speedSteps;
+        } else if (key == SDLK_RIGHTBRACKET) {
+          ++result.speedSteps;
+        }
+        break;
+      }
+      default:
+        break;
     }
   }
+
+  const bool* keys = SDL_GetKeyboardState(nullptr);
+  const auto held = [keys](SDL_Scancode a, SDL_Scancode b) { return keys[a] || keys[b]; };
+  result.panX = (held(SDL_SCANCODE_RIGHT, SDL_SCANCODE_D) ? 1.0 : 0.0) -
+                (held(SDL_SCANCODE_LEFT, SDL_SCANCODE_A) ? 1.0 : 0.0);
+  result.panY = (held(SDL_SCANCODE_DOWN, SDL_SCANCODE_S) ? 1.0 : 0.0) -
+                (held(SDL_SCANCODE_UP, SDL_SCANCODE_W) ? 1.0 : 0.0);
   return result;
 }
 
-void SdlWindow::draw(const world::Warehouse& warehouse, const simulation::Snapshot& snapshot,
-                     bool paused) {
-  int outputWidth = 0;
-  int outputHeight = 0;
-  if (!SDL_GetCurrentRenderOutputSize(impl_->renderer.get(), &outputWidth, &outputHeight)) {
+ScreenSize SdlWindow::renderSize() const {
+  int width = 0;
+  int height = 0;
+  if (!SDL_GetCurrentRenderOutputSize(impl_->renderer.get(), &width, &height)) {
     throwSdlError("SDL_GetCurrentRenderOutputSize failed");
   }
-  const Viewport viewport =
-      Viewport::fit(outputWidth, outputHeight, warehouse.width(), warehouse.height());
+  return {width, height};
+}
 
-  impl_->setColor(kBackground);
+void SdlWindow::draw(const DrawList& list) {
+  impl_->setColor(list.background);
   if (!SDL_RenderClear(impl_->renderer.get())) {
     throwSdlError("SDL_RenderClear failed");
   }
-
-  for (std::int32_t y = 0; y < warehouse.height(); ++y) {
-    for (std::int32_t x = 0; x < warehouse.width(); ++x) {
-      const core::Point cell{x, y};
-      impl_->fill(cellColor(warehouse.at(cell)), viewport.insetCellRect(cell, 0.03F));
-    }
+  for (const DrawCommand& command : list.commands) {
+    std::visit([this](const auto& typed) { impl_->execute(typed); }, command);
   }
-  for (const tasks::Task& task : snapshot.activeTasks) {
-    const Color pickupColor =
-        task.status == tasks::TaskStatus::Pending ? kPendingTask : kActiveTask;
-    if (task.status != tasks::TaskStatus::InProgress) {
-      impl_->fill(pickupColor, viewport.insetCellRect(task.pickup, 0.3F));
-    }
-    impl_->fill(kActiveTask, viewport.insetCellRect(task.dropoff, 0.4F));
-  }
-  for (const simulation::RobotSnapshot& robot : snapshot.robots) {
-    impl_->fill(robotColor(robot.status), viewport.insetCellRect(robot.position, 0.15F));
-  }
-  if (paused) {
-    impl_->fill(kPauseIcon, {8.0F, 8.0F, 6.0F, 20.0F});
-    impl_->fill(kPauseIcon, {20.0F, 8.0F, 6.0F, 20.0F});
-  }
-
   if (!SDL_RenderPresent(impl_->renderer.get())) {
     throwSdlError("SDL_RenderPresent failed");
   }

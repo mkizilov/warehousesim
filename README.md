@@ -5,8 +5,9 @@ headless library and CLI plus a separate SDL3 visualisation.
 
 ```
 core ← world ← planning ┐
-core ← robots ← tasks   ├← simulation ← rendering (SDL3) ← apps/gui
-                        ┘                              apps/cli ← simulation
+core ← robots ← tasks   ├← simulation ← view (no SDL) ← rendering (SDL3) ← apps/gui
+                        ┘      ↑
+                          apps/cli (headless)
 ```
 
 | Module       | Contents                                                                  |
@@ -17,7 +18,8 @@ core ← robots ← tasks   ├← simulation ← rendering (SDL3) ← apps/gui
 | `planning`   | `PathPlanner` interface, deterministic 4-connected A*                     |
 | `tasks`      | `TaskBoard` lifecycle, `NearestRobotAssigner`, seeded `TaskGenerator`     |
 | `simulation` | `Simulation` tick engine, `SimulationRunner` thread, JSON, demo scenario  |
-| `rendering`  | SDL3 `SdlWindow` (RAII), SDL-free `Viewport` math                         |
+| `view`       | `Camera`, `buildScene()` draw lists, `ViewController`; no SDL, fully tested |
+| `rendering`  | SDL3 `SdlWindow` (RAII): turns SDL events into `InputEvents`, runs a draw list |
 
 ## Build
 
@@ -56,11 +58,48 @@ The `world` module is independent of SDL, JSON and the simulation (its tests bui
 ## Run
 
 ```sh
-build/default/apps/warehousesim_cli --ticks 200 --seed 1     # prints the final snapshot as JSON
+build/default/apps/warehousesim_cli --ticks 200 --seed 1     # headless; prints the final snapshot as JSON
 build/default/apps/warehousesim_cli --layout compact         # demo, compact or fulfilment
-build/default/apps/warehousesim_gui --seed 1 --tick-ms 100   # Space pauses, Escape quits
+build/default/apps/warehousesim_gui --layout fulfilment --speed 2 --fps 60
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # render without a display
 ```
+
+`warehousesim_gui` options: `--seed N`, `--layout NAME`, `--tick-ms N` (fixed simulation step, default
+100 ms of real time at speed 1), `--speed X` (initial playback speed, 1/16 to 64), `--fps N` (frame cap,
+default 60), `--frames N` (exit after N frames; 0 = until closed).
+
+| Input | Action |
+|-------|--------|
+| Space | pause / resume |
+| `[` / `]` | halve / double playback speed (1/16x to 64x) |
+| mouse wheel, `+` / `-` | zoom about the pointer / window centre |
+| drag with any mouse button, arrow keys, WASD | pan |
+| `0` | fit the whole warehouse |
+| Esc, closing the window, Ctrl-C | quit (the worker thread is joined and SDL shut down) |
+
+## Visualisation
+
+The window shows the grid with walls, shelves, pickup `P`, dropoff `D` and charging `C` cells (letters
+appear when zoomed in), task markers, robot placeholders (a coloured square per robot: blue idle, orange
+heading to a pickup, red carrying; the id when zoomed in), column/row indices along the top and left edges,
+and a status bar with the tick, playback speed, zoom, task counts and the cell under the pointer.
+
+- **Fixed timestep.** The simulation runs on a worker thread; `core::FixedTimestep` turns elapsed real time
+  into whole simulation steps of constant size, so frame rate, window resizing and a slow renderer never
+  change what is simulated. Playback speed only scales how many steps happen per real second, and time
+  spent paused is not replayed afterwards. A stall longer than 200 steps' worth is dropped, not replayed.
+- **Camera.** `view::Camera` maps world space (cells, y down) to screen pixels (`screen = (world - centre) *
+  zoom + window centre`), zooms about the pointer, pans in pixels, keeps its centre inside the warehouse,
+  and re-fits the whole grid on resize until the user pans or zooms.
+- **Testable drawing.** `view::buildScene()` produces a backend-neutral `DrawList` (rectangles, lines,
+  text); `rendering::SdlWindow` only executes it. The scene, camera and input handling are unit-tested
+  without SDL.
+- **Resources.** `SdlWindow` owns SDL init, window and renderer through RAII (destroyed renderer, window,
+  then `SDL_Quit`), including when construction throws part-way.
+- **Headless.** `warehousesim_cli`, the simulation library and all tests need no display or SDL.
+
+Text is drawn with SDL's built-in 8x8 debug font. Robots here are placeholders showing existing
+simulation state; no new robot behaviour was added with the visualisation.
 
 ## Behaviour notes
 

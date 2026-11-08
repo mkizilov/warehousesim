@@ -31,7 +31,8 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `planning`   | `PathPlanner` interface, A*                           | core, world                          |
 | `tasks`      | task lifecycle, assignment, task generation           | core, robots                         |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
-| `rendering`  | SDL3 window and drawing (GUI only)                    | core, world, simulation, SDL3        |
+| `view`       | camera, scene (draw list), input -> view logic; no SDL | core, world, simulation             |
+| `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
 `apps/cli` (headless) and `apps/gui` (SDL3) are thin `main()`s. Tests are in `tests/`.
 
@@ -40,7 +41,14 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 - Inner modules never include outer ones; the build enforces this through `target_link_libraries`. Do not
   add a link just to reach a header — move the type inward instead.
 - Only `simulation` knows about JSON, and only `rendering` (private) knows about SDL. The simulation
-  library, CLI and all tests except `viewport_test.cpp` must build and run with no display and no SDL.
+  library, `view`, the CLI and every test must build and run with no display and no SDL.
+- Everything the GUI shows is decided in `view`: `buildScene()` turns simulation state plus the `Camera`
+  into a plain `DrawList`, and `ViewController` turns an SDL-free `InputEvents` into camera, pause and
+  speed changes. `rendering` only translates SDL events to `InputEvents` and executes draw commands, so
+  keep it free of decisions that can be tested.
+- The simulation advances by a fixed timestep (`core::FixedTimestep`, driven by `SimulationRunner` on its
+  own thread), never by frame time. Frame rate, window resizing and rendering speed must not change what
+  the simulation computes. Robot behaviour is out of scope for the view code: it only displays state.
 - Depend on interfaces at module seams (`PathPlanner`, `TaskAssigner`) and inject implementations through
   constructors. No global or singleton state.
 - Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them
@@ -49,7 +57,6 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   tests are built into `warehousesim_world_tests`, linked against `core` and `world` only.
 - New predefined layouts go in `src/world/layouts.cpp` and must pass `tests/layouts_test.cpp` (one
   connected walkable region, a dropoff, and a pickup source).
-- Keep rendering logic that can be pure (e.g. `Viewport`) free of SDL types so it can be unit-tested.
 
 ### Deterministic tests and behaviour
 
@@ -96,6 +103,7 @@ ctest --preset default
 build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
 build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # GUI smoke test, no window
+# (ctest also runs the headless CLI on every layout and checks that equal seeds give equal output)
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan   # ASan + UBSan
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan   # ThreadSanitizer
 cmake --preset tidy && cmake --build --preset tidy                          # clang-tidy

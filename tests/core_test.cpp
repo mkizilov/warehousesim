@@ -1,10 +1,15 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <set>
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
 
 #include "warehousesim/core/clock.hpp"
+#include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/core/rng.hpp"
@@ -120,6 +125,112 @@ TEST(SimClockTest, AdvancesInFixedSteps) {
   clock.advance();
   EXPECT_EQ(clock.tick(), 2U);
   EXPECT_DOUBLE_EQ(clock.seconds(), 1.0);
+}
+
+TEST(FixedTimestepTest, RejectsInvalidConfiguration) {
+  using warehousesim::core::FixedTimestep;
+  EXPECT_THROW(FixedTimestep(0.0), std::invalid_argument);
+  EXPECT_THROW(FixedTimestep(-0.1), std::invalid_argument);
+  EXPECT_THROW(FixedTimestep(std::nan("")), std::invalid_argument);
+  const double infinity = std::numeric_limits<double>::infinity();
+  EXPECT_THROW((void)FixedTimestep(infinity), std::invalid_argument);
+  EXPECT_THROW(FixedTimestep(0.1, 0), std::invalid_argument);
+  EXPECT_NO_THROW(FixedTimestep(0.1, 1));
+}
+
+TEST(FixedTimestepTest, ReturnsWholeStepsAndCarriesTheRemainder) {
+  warehousesim::core::FixedTimestep stepper(0.125);
+  EXPECT_EQ(stepper.advance(0.25), 2U);
+  EXPECT_EQ(stepper.advance(0.0625), 0U);
+  EXPECT_EQ(stepper.advance(0.0625), 1U);  // 0.0625 + 0.0625 carried over
+  EXPECT_EQ(stepper.advance(0.0), 0U);
+}
+
+TEST(FixedTimestepTest, ToleratesFloatingPointErrorAtStepBoundaries) {
+  warehousesim::core::FixedTimestep stepper(0.1);
+  // 0.3 / 0.1 is 2.9999999999999996 in binary floating point; it must still be three steps.
+  EXPECT_EQ(stepper.advance(0.3), 3U);
+}
+
+// The same wall-clock span must produce the same number of steps whatever the frame pattern.
+TEST(FixedTimestepTest, StepCountDoesNotDependOnFrameRate) {
+  // All durations are dyadic fractions, so every sum below is exact.
+  const std::vector<std::vector<double>> framePatterns = {
+      {1.0 / 16},           {1.0 / 64}, {1.0 / 128}, {1.0 / 64, 1.0 / 32, 1.0 / 128, 1.0 / 256},
+      {1.0 / 8, 1.0 / 512},
+  };
+  for (const auto& pattern : framePatterns) {
+    warehousesim::core::FixedTimestep stepper(0.125);
+    double elapsed = 0.0;
+    std::uint64_t steps = 0;
+    for (std::size_t i = 0; elapsed < 10.0; ++i) {
+      const double frame = pattern[i % pattern.size()];
+      elapsed += frame;
+      steps += stepper.advance(frame);
+    }
+    EXPECT_EQ(steps, static_cast<std::uint64_t>(elapsed / 0.125));
+  }
+}
+
+TEST(FixedTimestepTest, SpeedScalesElapsedTime) {
+  warehousesim::core::FixedTimestep fast(0.125);
+  fast.setSpeed(2.0);
+  EXPECT_EQ(fast.advance(0.0625), 1U);
+  EXPECT_EQ(fast.advance(0.25), 4U);
+
+  warehousesim::core::FixedTimestep slow(0.125);
+  slow.setSpeed(0.5);
+  EXPECT_EQ(slow.advance(0.125), 0U);
+  EXPECT_EQ(slow.advance(0.125), 1U);
+}
+
+TEST(FixedTimestepTest, SpeedIsClampedAndValidated) {
+  using warehousesim::core::FixedTimestep;
+  FixedTimestep stepper(0.1);
+  stepper.setSpeed(1000.0);
+  EXPECT_DOUBLE_EQ(stepper.speed(), FixedTimestep::kMaxSpeed);
+  stepper.setSpeed(0.0001);
+  EXPECT_DOUBLE_EQ(stepper.speed(), FixedTimestep::kMinSpeed);
+  EXPECT_THROW(stepper.setSpeed(0.0), std::invalid_argument);
+  EXPECT_THROW(stepper.setSpeed(-2.0), std::invalid_argument);
+  EXPECT_THROW(stepper.setSpeed(std::nan("")), std::invalid_argument);
+  EXPECT_DOUBLE_EQ(stepper.speed(), FixedTimestep::kMinSpeed);  // failed calls change nothing
+  EXPECT_DOUBLE_EQ(FixedTimestep::clampSpeed(2.0), 2.0);
+}
+
+TEST(FixedTimestepTest, BacklogBeyondTheCapIsDroppedNotReplayed) {
+  warehousesim::core::FixedTimestep stepper(0.125, 5);
+  EXPECT_EQ(stepper.advance(100.0), 5U);
+  EXPECT_EQ(stepper.advance(0.0625), 0U);  // no leftover from the dropped time
+  EXPECT_EQ(stepper.advance(0.0625), 1U);
+  EXPECT_EQ(stepper.advance(0.625), 5U);  // exactly at the cap is not dropped
+}
+
+TEST(FixedTimestepTest, SecondsUntilNextStepTracksTheAccumulator) {
+  warehousesim::core::FixedTimestep stepper(0.125);
+  EXPECT_DOUBLE_EQ(stepper.secondsUntilNextStep(), 0.125);
+  EXPECT_EQ(stepper.advance(0.0625), 0U);
+  EXPECT_DOUBLE_EQ(stepper.secondsUntilNextStep(), 0.0625);
+  stepper.setSpeed(2.0);
+  EXPECT_DOUBLE_EQ(stepper.secondsUntilNextStep(), 0.03125);  // real time at the new speed
+  EXPECT_EQ(stepper.advance(0.03125), 1U);
+  EXPECT_DOUBLE_EQ(stepper.secondsUntilNextStep(), 0.0625);
+}
+
+TEST(FixedTimestepTest, ResetForgetsCarriedTime) {
+  warehousesim::core::FixedTimestep stepper(0.125);
+  EXPECT_EQ(stepper.advance(0.0625), 0U);
+  stepper.reset();
+  EXPECT_EQ(stepper.advance(0.0625), 0U);
+  EXPECT_DOUBLE_EQ(stepper.secondsUntilNextStep(), 0.0625);
+}
+
+TEST(FixedTimestepTest, RejectsInvalidElapsedTime) {
+  warehousesim::core::FixedTimestep stepper(0.1);
+  EXPECT_THROW((void)stepper.advance(-0.001), std::invalid_argument);
+  EXPECT_THROW((void)stepper.advance(std::nan("")), std::invalid_argument);
+  EXPECT_THROW((void)stepper.advance(std::numeric_limits<double>::infinity()),
+               std::invalid_argument);
 }
 
 TEST(SimClockTest, RejectsNonPositiveStep) {
