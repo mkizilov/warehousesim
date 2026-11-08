@@ -79,6 +79,15 @@ void Camera::resize(ScreenSize screen) {
   }
 }
 
+void Camera::setGrid(world::GridSize grid) {
+  grid_ = grid;
+  if (fitted_) {
+    fit();
+  } else {
+    constrainCenter();
+  }
+}
+
 void Camera::fit() {
   const double usableWidth = std::max(1.0, screen_.width - 2.0 * kFitMarginPixels);
   const double usableHeight = std::max(1.0, screen_.height - 2.0 * kFitMarginPixels);

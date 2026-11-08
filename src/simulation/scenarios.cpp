@@ -1,10 +1,13 @@
 #include "warehousesim/simulation/scenarios.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include "warehousesim/core/angle.hpp"
+#include "warehousesim/core/point.hpp"
+#include "warehousesim/world/layout_check.hpp"
 #include "warehousesim/world/layouts.hpp"
 
 namespace warehousesim::simulation {
@@ -50,25 +53,60 @@ SimulationConfig scenarioConfig(std::uint64_t seed, const robots::RobotSpec& rob
   return config;
 }
 
+// Where the robots of a layout start. On charging stations if it has any (up to four of them).
+// Otherwise on open floor, in reading order, each at least two cells from the one before: on the
+// top row of the demo hall that gives x = 0, 2, 4 and 6. A layout with no open floor falls back on
+// its pickups and dropoffs.
+std::vector<core::Point> startCells(const world::Warehouse& warehouse) {
+  std::vector<core::Point> starts = warehouse.cellsOfType(world::CellType::Charging);
+  if (!starts.empty()) {
+    starts.resize(std::min(starts.size(), kMaxRobots));
+    return starts;
+  }
+  for (const world::CellType type :
+       {world::CellType::Free, world::CellType::Pickup, world::CellType::Dropoff}) {
+    for (const core::Point cell : warehouse.cellsOfType(type)) {
+      const bool touching = std::any_of(starts.begin(), starts.end(), [cell](core::Point other) {
+        return core::manhattanDistance(other, cell) <= 1;
+      });
+      if (!touching && starts.size() < kMaxRobots) {
+        starts.push_back(cell);
+      }
+    }
+    if (!starts.empty()) {
+      break;
+    }
+  }
+  return starts;
+}
+
 }  // namespace
 
+Simulation makeMapSimulation(world::Warehouse warehouse, std::uint64_t seed) {
+  const std::vector<world::LayoutIssue> issues = world::checkLayout(warehouse);
+  const auto blocking =
+      std::find_if(issues.begin(), issues.end(),
+                   [](const world::LayoutIssue& issue) { return issue.blocksSimulation; });
+  if (blocking != issues.end()) {
+    throw std::invalid_argument("the layout cannot host a simulation: " + blocking->message);
+  }
+  // Without charging stations robots have no battery model (they could never recharge).
+  const bool chargers = !warehouse.cellsOfType(world::CellType::Charging).empty();
+  const std::vector<core::Point> starts = startCells(warehouse);
+  return Simulation(std::move(warehouse), starts,
+                    scenarioConfig(seed, chargers ? energySpec() : handlingSpec()));
+}
+
 Simulation makeDemoSimulation(std::uint64_t seed) {
-  // The demo hall has no charging stations, so robots here have no battery model.
-  return Simulation(world::makeDemoWarehouse(), {{0, 0}, {2, 0}, {4, 0}, {6, 0}},
-                    scenarioConfig(seed, handlingSpec()));
+  return makeMapSimulation(world::makeDemoWarehouse(), seed);
 }
 
 std::optional<Simulation> makeLayoutSimulation(std::string_view layoutName, std::uint64_t seed) {
-  if (layoutName == "demo") {
-    return makeDemoSimulation(seed);
-  }
   auto warehouse = world::makePredefinedWarehouse(layoutName);
   if (!warehouse) {
     return std::nullopt;
   }
-  std::vector<core::Point> starts = warehouse->cellsOfType(world::CellType::Charging);
-  starts.resize(std::min(starts.size(), kMaxRobots));
-  return Simulation(*std::move(warehouse), starts, scenarioConfig(seed, energySpec()));
+  return makeMapSimulation(*std::move(warehouse), seed);
 }
 
 }  // namespace warehousesim::simulation

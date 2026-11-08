@@ -22,11 +22,27 @@ endfunction()
 warehousesim_add_test(warehousesim_world_tests
   SOURCES
     core_test.cpp
+    layout_check_test.cpp
     layouts_test.cpp
     occupancy_test.cpp
     warehouse_test.cpp
     world_model_test.cpp
   LIBS warehousesim::world)
+
+# The map file format needs the world and JSON but no editor, simulation, rendering or SDL. The file
+# tests write only below the working directory (the build tree under ctest), see scratch_dir.hpp.
+warehousesim_add_test(warehousesim_mapio_tests
+  SOURCES
+    map_file_io_test.cpp
+    map_file_test.cpp
+  LIBS warehousesim::mapio)
+
+# The editing model needs the world and the map file format but no simulation, view, rendering or SDL.
+warehousesim_add_test(warehousesim_editor_tests
+  SOURCES
+    editor_files_test.cpp
+    map_editor_test.cpp
+  LIBS warehousesim::editor warehousesim::mapio)
 
 # Linked against core, world and planning only: the path planner needs no robots, tasks,
 # simulation, rendering or SDL. The reference search and map generators come from testing/.
@@ -83,16 +99,20 @@ warehousesim_add_test(warehousesim_tests
     camera_test.cpp
     collision_avoidance_test.cpp
     cooperative_planning_test.cpp
+    editor_controller_test.cpp
+    editor_scene_test.cpp
     interpolation_test.cpp
+    map_simulation_test.cpp
     movement_test.cpp
     runner_test.cpp
     scene_test.cpp
     simulation_dispatch_test.cpp
     simulation_test.cpp
     view_controller_test.cpp
-  LIBS warehousesim::view warehousesim::simulation)
+  LIBS warehousesim::view warehousesim::simulation warehousesim::mapio)
 
 # The simulation must run with no window, display or SDL: the CLI does not link any of them.
 add_test(NAME headless_cli_all_layouts
   COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:warehousesim_cli>
+          -DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/headless_cli
           -P ${CMAKE_SOURCE_DIR}/cmake/RunHeadlessCli.cmake)

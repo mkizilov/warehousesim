@@ -13,10 +13,10 @@
 #include <utility>
 
 #include "arguments.hpp"
+#include "simulation_source.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/rendering/sdl_window.hpp"
 #include "warehousesim/simulation/runner.hpp"
-#include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/view/interpolation.hpp"
 #include "warehousesim/view/scene.hpp"
 #include "warehousesim/view/view_controller.hpp"
@@ -29,8 +29,9 @@ constexpr std::uint64_t kMaxTickMs = 60000;
 constexpr std::uint64_t kMaxFps = 1000;
 
 void printUsage(std::ostream& out) {
-  out << "usage: warehousesim_gui [--seed N] [--layout NAME] [--tick-ms N] [--speed X]\n"
-         "                        [--fps N] [--frames N]\n"
+  out << "usage: warehousesim_gui [--seed N] [--layout NAME | --map FILE] [--tick-ms N]\n"
+         "                        [--speed X] [--fps N] [--frames N]\n"
+         "  --map FILE   run a map made with warehousesim_editor instead of a layout\n"
          "  --tick-ms N  fixed simulation step, in real milliseconds at speed 1 (default 100)\n"
          "  --speed X    initial playback speed multiplier, 0.0625 to 64 (default 1)\n"
          "  --fps N      frame rate cap, 1 to 1000 (default 60)\n"
@@ -47,7 +48,7 @@ int main(int argc, char** argv) {
   std::uint64_t fps = 60;
   std::uint64_t maxFrames = 0;
   double speed = 1.0;
-  std::string layout = "demo";
+  warehousesim::apps::WarehouseSource source;
   bool failed = false;
   for (int i = 1; i < argc && !failed; ++i) {
     if (warehousesim::apps::readUnsignedOption(argc, argv, i, "--seed", seed, failed) ||
@@ -55,12 +56,14 @@ int main(int argc, char** argv) {
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--fps", fps, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--frames", maxFrames, failed) ||
         warehousesim::apps::readDoubleOption(argc, argv, i, "--speed", speed, failed) ||
-        warehousesim::apps::readStringOption(argc, argv, i, "--layout", layout, failed)) {
+        warehousesim::apps::readStringOption(argc, argv, i, "--layout", source.layout, failed) ||
+        warehousesim::apps::readStringOption(argc, argv, i, "--map", source.mapFile, failed)) {
       continue;
     }
     failed = true;
   }
-  if (failed || tickMs == 0 || tickMs > kMaxTickMs || fps == 0 || fps > kMaxFps ||
+  if (failed || source.conflicting() || tickMs == 0 || tickMs > kMaxTickMs || fps == 0 ||
+      fps > kMaxFps ||
       !(speed >= warehousesim::core::FixedTimestep::kMinSpeed &&
         speed <= warehousesim::core::FixedTimestep::kMaxSpeed)) {
     printUsage(std::cerr);
@@ -68,16 +71,19 @@ int main(int argc, char** argv) {
   }
 
   try {
-    auto simulation = warehousesim::simulation::makeLayoutSimulation(layout, seed);
-    if (!simulation) {
-      printUsage(std::cerr);
-      return 2;
+    auto made = warehousesim::apps::makeSimulation(source, seed, std::cerr);
+    if (!made.simulation) {
+      if (made.unknownLayout) {
+        printUsage(std::cerr);
+        return 2;
+      }
+      return 1;
     }
 
     // Declaration order matters for shutdown: the window (and SDL) is torn down before the
     // runner, and the runner's destructor joins its thread even if we leave through an exception.
     warehousesim::simulation::SimulationRunner runner(
-        std::move(*simulation),
+        std::move(*made.simulation),
         std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)));
     warehousesim::rendering::SdlWindow window("WarehouseSim", 960, 600);
     warehousesim::view::ViewController controller(window.renderSize(), runner.warehouse().size(),

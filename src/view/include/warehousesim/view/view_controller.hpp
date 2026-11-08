@@ -1,8 +1,10 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "warehousesim/view/camera.hpp"
+#include "warehousesim/view/editor_input.hpp"
 #include "warehousesim/world/grid_size.hpp"
 
 namespace warehousesim::view {
@@ -25,6 +27,9 @@ struct InputEvents {
   double panY = 0.0;
   std::optional<ScreenPoint> pointer;  // latest pointer position inside the window
   bool pointerLeft = false;            // the pointer left the window
+  // Used by the map editor, in the order they happened; the simulation view ignores them.
+  std::vector<PointerAction> pointerActions;
+  std::vector<EditorCommand> commands;
 };
 
 // Owns the camera plus the pause, playback-speed and overlay state that the UI controls. Both
@@ -38,6 +43,8 @@ class ViewController {
   ViewController(ScreenSize screen, world::GridSize grid, double initialSpeed = 1.0);
 
   void resize(ScreenSize screen) { camera_.resize(screen); }
+  // The grid being looked at changed size (see Camera::setGrid).
+  void setGrid(world::GridSize grid) { camera_.setGrid(grid); }
   // Applies one frame of input. `frameSeconds` (>= 0) scales held-key panning so it moves at
   // the same speed at any frame rate; non-finite input values are ignored.
   void apply(const InputEvents& input, double frameSeconds);

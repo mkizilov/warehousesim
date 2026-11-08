@@ -2,6 +2,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <optional>
 #include <stdexcept>
 #include <variant>
 
@@ -30,7 +31,78 @@ SDL_FRect toSdl(const ScreenRect& rect) {
 }
 
 bool isMouseEvent(Uint32 type) {
-  return type == SDL_EVENT_MOUSE_MOTION || type == SDL_EVENT_MOUSE_WHEEL;
+  return type == SDL_EVENT_MOUSE_MOTION || type == SDL_EVENT_MOUSE_WHEEL ||
+         type == SDL_EVENT_MOUSE_BUTTON_DOWN || type == SDL_EVENT_MOUSE_BUTTON_UP;
+}
+
+std::optional<view::PointerButton> pointerButtonOf(Uint8 button) {
+  switch (button) {
+    case SDL_BUTTON_LEFT:
+      return view::PointerButton::Primary;
+    case SDL_BUTTON_RIGHT:
+      return view::PointerButton::Secondary;
+    default:
+      return std::nullopt;
+  }
+}
+
+// What a key press means to the map editor, if anything. Control (Command on a Mac) with a letter
+// is a file or history command, Shift with an arrow resizes the map, the rest are single keys.
+std::optional<view::EditorCommand> editorCommandFor(SDL_Keycode key, SDL_Keymod mod, bool repeat) {
+  using view::EditorCommand;
+  if ((mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0) {
+    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+    switch (key) {
+      case SDLK_Z:
+        return shift ? EditorCommand::Redo : EditorCommand::Undo;
+      case SDLK_Y:
+        return EditorCommand::Redo;
+      case SDLK_S:
+        return repeat ? std::nullopt : std::optional(EditorCommand::Save);
+      case SDLK_O:
+        return repeat ? std::nullopt : std::optional(EditorCommand::Load);
+      default:
+        return std::nullopt;
+    }
+  }
+  if ((mod & SDL_KMOD_SHIFT) != 0) {
+    switch (key) {
+      case SDLK_RIGHT:
+        return EditorCommand::Wider;
+      case SDLK_LEFT:
+        return EditorCommand::Narrower;
+      case SDLK_DOWN:
+        return EditorCommand::Taller;
+      case SDLK_UP:
+        return EditorCommand::Shorter;
+      default:
+        return std::nullopt;
+    }
+  }
+  if (repeat) {
+    return std::nullopt;
+  }
+  switch (key) {
+    case SDLK_1:
+      return EditorCommand::ToolWall;
+    case SDLK_2:
+      return EditorCommand::ToolShelf;
+    case SDLK_3:
+      return EditorCommand::ToolPickup;
+    case SDLK_4:
+      return EditorCommand::ToolDropoff;
+    case SDLK_5:
+      return EditorCommand::ToolCharging;
+    case SDLK_6:
+      return EditorCommand::ToolErase;
+    case SDLK_L:
+      return EditorCommand::NextLayout;
+    case SDLK_DELETE:
+    case SDLK_BACKSPACE:
+      return EditorCommand::Clear;
+    default:
+      return std::nullopt;
+  }
 }
 
 }  // namespace
@@ -99,7 +171,8 @@ SdlWindow::SdlWindow(const std::string& title, int width, int height)
 
 SdlWindow::~SdlWindow() = default;
 
-InputEvents SdlWindow::pollEvents() {
+InputEvents SdlWindow::pollEvents(PollMode mode) {
+  const bool editing = mode == PollMode::Editor;
   InputEvents result;
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
@@ -120,13 +193,33 @@ InputEvents SdlWindow::pollEvents() {
       case SDL_EVENT_MOUSE_MOTION: {
         result.pointer = ScreenPoint{event.motion.x, event.motion.y};
         result.pointerLeft = false;
-        const Uint32 dragButtons = SDL_BUTTON_LMASK | SDL_BUTTON_MMASK | SDL_BUTTON_RMASK;
+        // The simulation view pans with any button; the editor paints with two and pans with one.
+        const Uint32 dragButtons =
+            editing ? SDL_BUTTON_MMASK : (SDL_BUTTON_LMASK | SDL_BUTTON_MMASK | SDL_BUTTON_RMASK);
         if ((event.motion.state & dragButtons) != 0) {
           result.dragX += event.motion.xrel;
           result.dragY += event.motion.yrel;
         }
+        if (editing && (event.motion.state & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK)) != 0) {
+          result.pointerActions.push_back({view::PointerAction::Kind::Move,
+                                           view::PointerButton::Primary,
+                                           ScreenPoint{event.motion.x, event.motion.y}});
+        }
         break;
       }
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (editing) {
+          if (const auto button = pointerButtonOf(event.button.button)) {
+            const bool pressed = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+            result.pointerActions.push_back(
+                {pressed ? view::PointerAction::Kind::Press : view::PointerAction::Kind::Release,
+                 *button, ScreenPoint{event.button.x, event.button.y}});
+            result.pointer = ScreenPoint{event.button.x, event.button.y};
+            result.pointerLeft = false;
+          }
+        }
+        break;
       case SDL_EVENT_MOUSE_WHEEL: {
         const float direction = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -1.0F : 1.0F;
         result.zoomSteps += static_cast<double>(event.wheel.y * direction);
@@ -137,6 +230,12 @@ InputEvents SdlWindow::pollEvents() {
       }
       case SDL_EVENT_KEY_DOWN: {
         const SDL_Keycode key = event.key.key;
+        if (editing) {
+          if (const auto command = editorCommandFor(key, event.key.mod, event.key.repeat)) {
+            result.commands.push_back(*command);
+            break;
+          }
+        }
         if (key == SDLK_EQUALS || key == SDLK_PLUS || key == SDLK_KP_PLUS) {
           result.zoomSteps += 1.0;  // auto-repeat gives smooth zooming while held
         } else if (key == SDLK_MINUS || key == SDLK_KP_MINUS) {
@@ -171,6 +270,11 @@ InputEvents SdlWindow::pollEvents() {
                 (held(SDL_SCANCODE_LEFT, SDL_SCANCODE_A) ? 1.0 : 0.0);
   result.panY = (held(SDL_SCANCODE_DOWN, SDL_SCANCODE_S) ? 1.0 : 0.0) -
                 (held(SDL_SCANCODE_UP, SDL_SCANCODE_W) ? 1.0 : 0.0);
+  if (editing && (SDL_GetModState() & (SDL_KMOD_SHIFT | SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0) {
+    // Shift+arrow resizes the map and Ctrl+S saves it: neither should also move the view.
+    result.panX = 0.0;
+    result.panY = 0.0;
+  }
   return result;
 }
 

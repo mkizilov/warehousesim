@@ -4,10 +4,10 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
-#include <utility>
 
 #include "warehousesim/core/angle.hpp"
 #include "warehousesim/core/vec2.hpp"
+#include "warehousesim/view/scene_parts.hpp"
 
 namespace warehousesim::view {
 
@@ -15,95 +15,25 @@ namespace {
 
 using core::Point;
 
-constexpr Color kBackground{18, 20, 26};
-constexpr Color kFloor{44, 48, 58};
 constexpr Color kWall{100, 100, 110};
 constexpr Color kShelf{140, 100, 60};
 constexpr Color kPickup{170, 140, 40};
 constexpr Color kDropoff{60, 160, 90};
 constexpr Color kCharging{130, 90, 190};
-constexpr Color kGridLine{26, 28, 35};
 constexpr Color kPendingTask{240, 210, 60};
 constexpr Color kActiveTask{90, 200, 230};
-constexpr Color kLetter{15, 15, 15};
 constexpr Color kRobotId{255, 255, 255};
 constexpr Color kHeadingMarker{250, 250, 250};
 constexpr Color kCargo{235, 215, 160};
 constexpr Color kGaugeBackground{20, 20, 24};
-constexpr Color kPanel{30, 33, 41};
-constexpr Color kPanelText{200, 205, 215};
 constexpr Color kPausedText{255, 120, 100};
 constexpr Color kHeldBack{255, 70, 70};
-
-ScreenRect inset(const ScreenRect& rect, double fraction) {
-  const double margin = rect.width * fraction;
-  return {rect.x + margin, rect.y + margin, rect.width - 2.0 * margin, rect.height - 2.0 * margin};
-}
 
 Color batteryColor(double fraction) {
   if (fraction < 0.25) {
     return {220, 60, 60};
   }
   return fraction < 0.5 ? Color{230, 190, 60} : Color{80, 200, 100};
-}
-
-int digitCount(std::int32_t value) { return static_cast<int>(std::to_string(value).size()); }
-
-bool contains(const CellRange& range, Point p) {
-  return p.x >= range.left && p.x < range.right && p.y >= range.top && p.y < range.bottom;
-}
-
-// A text command centred on a rectangle.
-Text centeredText(const ScreenRect& rect, std::string text, Color color) {
-  const double width = kGlyphSize * static_cast<double>(text.size());
-  return {{rect.x + (rect.width - width) / 2.0, rect.y + (rect.height - kGlyphSize) / 2.0},
-          std::move(text),
-          color};
-}
-
-void addCells(DrawList& list, const world::Warehouse& warehouse, const Camera& camera,
-              const CellRange& range) {
-  // One rectangle for all the open floor in view, then only the cells that differ from it.
-  const ScreenRect first = camera.cellRect({range.left, range.top});
-  const ScreenRect last = camera.cellRect({range.right - 1, range.bottom - 1});
-  list.commands.emplace_back(
-      FillRect{{first.x, first.y, last.right() - first.x, last.bottom() - first.y}, kFloor});
-
-  const bool letters = camera.zoom() >= kMinZoomForLetters;
-  for (std::int32_t y = range.top; y < range.bottom; ++y) {
-    for (std::int32_t x = range.left; x < range.right; ++x) {
-      const world::CellType type = warehouse.at({x, y});
-      if (type == world::CellType::Free) {
-        continue;
-      }
-      const ScreenRect rect = camera.cellRect({x, y});
-      list.commands.emplace_back(FillRect{rect, cellColor(type)});
-      const bool special = type == world::CellType::Pickup || type == world::CellType::Dropoff ||
-                           type == world::CellType::Charging;
-      if (letters && special) {
-        list.commands.emplace_back(
-            centeredText(rect, std::string(1, world::toChar(type)), kLetter));
-      }
-    }
-  }
-}
-
-void addGridLines(DrawList& list, const Camera& camera, const CellRange& range) {
-  if (camera.zoom() < kMinZoomForGridLines) {
-    return;
-  }
-  const ScreenPoint start =
-      camera.worldToScreen({static_cast<double>(range.left), static_cast<double>(range.top)});
-  const ScreenPoint end =
-      camera.worldToScreen({static_cast<double>(range.right), static_cast<double>(range.bottom)});
-  for (std::int32_t x = range.left; x <= range.right; ++x) {
-    const double sx = camera.worldToScreen({static_cast<double>(x), 0.0}).x;
-    list.commands.emplace_back(Line{{sx, start.y}, {sx, end.y}, kGridLine});
-  }
-  for (std::int32_t y = range.top; y <= range.bottom; ++y) {
-    const double sy = camera.worldToScreen({0.0, static_cast<double>(y)}).y;
-    list.commands.emplace_back(Line{{start.x, sy}, {end.x, sy}, kGridLine});
-  }
 }
 
 void addTaskMarkers(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
@@ -117,18 +47,6 @@ void addTaskMarkers(DrawList& list, const simulation::Snapshot& snapshot, const 
       list.commands.emplace_back(FillRect{inset(camera.cellRect(task.dropoff), 0.4), kActiveTask});
     }
   }
-}
-
-void addOutline(DrawList& list, const ScreenRect& cell, Color color) {
-  const ScreenRect r = inset(cell, 0.06);
-  const ScreenPoint topLeft{r.x, r.y};
-  const ScreenPoint topRight{r.right(), r.y};
-  const ScreenPoint bottomRight{r.right(), r.bottom()};
-  const ScreenPoint bottomLeft{r.x, r.bottom()};
-  list.commands.emplace_back(Line{topLeft, topRight, color});
-  list.commands.emplace_back(Line{topRight, bottomRight, color});
-  list.commands.emplace_back(Line{bottomRight, bottomLeft, color});
-  list.commands.emplace_back(Line{bottomLeft, topLeft, color});
 }
 
 // The cells each robot holds (its own and those it has claimed ahead), outlined in its colour.
@@ -251,42 +169,6 @@ void addRobots(DrawList& list, const simulation::Snapshot& snapshot, const Camer
       list.commands.emplace_back(FillRect{gauge, kGaugeBackground});
       list.commands.emplace_back(FillRect{{gauge.x, gauge.y, gauge.width * fraction, gauge.height},
                                           batteryColor(fraction)});
-    }
-  }
-}
-
-void addRulers(DrawList& list, const Camera& camera, const CellRange& range) {
-  const ScreenSize screen = camera.screen();
-  const world::GridSize grid = camera.grid();
-  const double leftWidth = digitCount(grid.height() - 1) * kGlyphSize + 6.0;
-  const double width = static_cast<double>(screen.width);
-  const double height = static_cast<double>(screen.height);
-
-  list.commands.emplace_back(FillRect{{0.0, 0.0, width, kRulerThickness}, kPanel});
-  list.commands.emplace_back(FillRect{{0.0, 0.0, leftWidth, height}, kPanel});
-
-  const int columnStride =
-      labelStride(camera.zoom(), digitCount(grid.width() - 1) * kGlyphSize + 8.0);
-  for (std::int32_t x = range.left; x < range.right; ++x) {
-    if (x % columnStride != 0) {
-      continue;
-    }
-    std::string label = std::to_string(x);
-    const double labelWidth = kGlyphSize * static_cast<double>(label.size());
-    const double left = camera.worldToScreen({x + 0.5, 0.0}).x - labelWidth / 2.0;
-    if (left >= leftWidth && left + labelWidth <= width) {
-      list.commands.emplace_back(Text{{left, 3.0}, std::move(label), kPanelText});
-    }
-  }
-
-  const int rowStride = labelStride(camera.zoom(), kGlyphSize + 6.0);
-  for (std::int32_t y = range.top; y < range.bottom; ++y) {
-    if (y % rowStride != 0) {
-      continue;
-    }
-    const double top = camera.worldToScreen({0.0, y + 0.5}).y - kGlyphSize / 2.0;
-    if (top >= kRulerThickness && top + kGlyphSize <= height - kStatusBarHeight) {
-      list.commands.emplace_back(Text{{3.0, top}, std::to_string(y), kPanelText});
     }
   }
 }
@@ -422,7 +304,7 @@ DrawList buildScene(const world::Warehouse& warehouse, const simulation::Snapsho
     }
     addRobots(list, snapshot, camera, range);
   }
-  addRulers(list, camera, range);
+  addRulers(list, camera, range, kStatusBarHeight);
   addStatusBar(list, statusLines(warehouse, snapshot, camera, status), status.paused, screen);
   return list;
 }

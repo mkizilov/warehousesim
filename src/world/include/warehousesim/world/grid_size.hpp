@@ -7,6 +7,15 @@
 
 namespace warehousesim::world {
 
+// The longest side accepted for a layout that comes from outside the program (a map file, the
+// editor). GridSize itself only insists on positive sides; this bound keeps untrusted input from
+// asking for gigabytes of cells, and is the size the planner benchmarks go up to.
+inline constexpr std::int32_t kMaxMapSide = 512;
+
+[[nodiscard]] constexpr bool isValidMapSide(std::int64_t side) noexcept {
+  return side >= 1 && side <= kMaxMapSide;
+}
+
 // Validated grid dimensions: both sides are at least 1.
 class GridSize {
  public:

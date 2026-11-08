@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 
 #include "warehousesim/core/point.hpp"
@@ -376,6 +377,44 @@ TEST(CameraTest, ResizeThenResetGivesTheSameViewAsAFreshCamera) {
   const Camera fresh(ScreenSize{1280, 720}, GridSize(16, 9));
   EXPECT_DOUBLE_EQ(camera.zoom(), fresh.zoom());
   EXPECT_EQ(camera.center(), fresh.center());
+}
+
+// ---- changing the grid ------------------------------------------------------------------
+
+TEST(CameraTest, ChangingTheGridOfAFittedCameraRefitsTheNewGrid) {
+  Camera camera(ScreenSize{200, 100}, GridSize(10, 10));
+  camera.setGrid(GridSize(20, 5));
+  EXPECT_TRUE(camera.fitted());
+  EXPECT_EQ(camera.grid(), GridSize(20, 5));
+  const Camera fresh(ScreenSize{200, 100}, GridSize(20, 5));
+  EXPECT_DOUBLE_EQ(camera.zoom(), fresh.zoom());
+  EXPECT_EQ(camera.center(), fresh.center());
+}
+
+TEST(CameraTest, ChangingTheGridOfAManualCameraKeepsZoomAndCentreWhenTheyStillFit) {
+  Camera camera = tenByTen();
+  camera.centerOn({3.0, 4.0});
+  camera.setGrid(GridSize(30, 30));
+  EXPECT_FALSE(camera.fitted());
+  EXPECT_DOUBLE_EQ(camera.zoom(), 10.0);
+  EXPECT_EQ(camera.center(), (WorldPoint{3.0, 4.0}));
+  EXPECT_EQ(camera.grid(), GridSize(30, 30));
+}
+
+TEST(CameraTest, ShrinkingTheGridPullsAManualCentreBackInside) {
+  Camera camera = tenByTen();
+  camera.centerOn({9.0, 8.0});
+  camera.setGrid(GridSize(4, 3));
+  EXPECT_DOUBLE_EQ(camera.zoom(), 10.0);
+  EXPECT_EQ(camera.center(), (WorldPoint{4.0, 3.0}));
+}
+
+TEST(CameraTest, CellsOfTheNewGridAreFoundAfterTheGridChanged) {
+  Camera camera = tenByTen();
+  EXPECT_FALSE(camera.cellAt(ScreenPoint{200.0, 50.0}).has_value());  // right of the 10 x 10 grid
+  camera.setGrid(GridSize(30, 10));
+  camera.centerOn({15.0, 5.0});
+  EXPECT_EQ(camera.cellAt(ScreenPoint{190.0, 50.0}), std::optional<Point>(P(24, 5)));
 }
 
 // ---- invariants under arbitrary use -----------------------------------------------------

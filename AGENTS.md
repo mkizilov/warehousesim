@@ -26,24 +26,27 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | Module       | Responsibility                                        | May depend on                        |
 |--------------|-------------------------------------------------------|--------------------------------------|
 | `core`       | points, ids, clock, deterministic RNG                 | std only                             |
-| `world`      | grid model: cell types, static layout, robot occupancy (cell plus claimed cells), predefined layouts | core |
+| `world`      | grid model: cell types, static layout, robot occupancy (cell plus claimed cells), predefined layouts, `checkLayout` (can it host a simulation?) | core |
 | `robots`     | robot entity: pose, motion model, battery, task, path, state machine | core                  |
 | `planning`   | `PathPlanner` interface, A* with options, results, reused workspace; space-time A* (`SpaceTimeAStar`) behind a `SpaceTimeConstraints` interface | core, world |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
-| `view`       | camera, scene (draw list), interpolation, input -> view logic; no SDL | core, world, simulation |
+| `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing | core, world, nlohmann_json (private) |
+| `editor`     | `MapEditor` editing model (tools, strokes, undo, resize), `editor_files` (save/load/predefined) | core, world, mapio (private) |
+| `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `EditorController`); no SDL | core, world, simulation, editor |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
-`apps/cli` (headless) and `apps/gui` (SDL3) are thin `main()`s. Tests are in `tests/`.
+`apps/cli` (headless), `apps/gui` (SDL3) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`.
 
 ### Clean architecture
 
 - Inner modules never include outer ones; the build enforces this through `target_link_libraries`. Do not
   add a link just to reach a header — move the type inward instead.
-- Only `simulation` knows about JSON, and only `rendering` (private) knows about SDL. The simulation
-  library, `view`, the CLI and every test must build and run with no display and no SDL.
+- Only `simulation` (snapshots) and `mapio` (map files) know about JSON, and only `rendering` (private)
+  knows about SDL. The simulation library, `mapio`, `editor`, `view`, the CLI and every test must build and
+  run with no display and no SDL.
 - The frame rate must never reach the simulation. The GUI draws `view::blend(frame.previous,
   frame.latest, frame.alpha)` from `SimulationRunner::frame()`; `alpha` comes from `core::FixedTimestep`, the
   picture is a function of real time only (`FrameRateTest`), and nothing outside the runner and the GUI
@@ -138,7 +141,24 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   must not depend on simulation, JSON or SDL: `tests/world_*`, `layouts`, `occupancy`, `warehouse` and `core`
   tests are built into `warehousesim_world_tests`, linked against `core` and `world` only.
 - New predefined layouts go in `src/world/layouts.cpp` and must pass `tests/layouts_test.cpp` (one
-  connected walkable region, a dropoff, and a pickup source).
+  connected walkable region, a dropoff, and a pickup source) and `world::checkLayout`.
+- Map files and the editor sit on top of the world model and never the other way round: `world` must not
+  learn about files, JSON, editing, undo or windows (it only offers pure functions of a layout, like
+  `checkLayout` and `kMaxMapSide`). The editor edits a `Warehouse` through its public interface only.
+- The map file format is a contract. `mapio/map_file.hpp` is its definition and the README table must say
+  the same; `MapFileFormatTest.TheTextIsPinnedExactlyForASmallMap` pins the exact bytes. Reading stays
+  strict (unknown and duplicate keys, wrong types, out-of-range numbers, cells outside the grid or listed
+  twice, deep nesting and big documents are all refused with a JSON Pointer, never an exception, and never
+  a crash on any input) and writing stays canonical (`parse(serialize(d)) == d`, equal documents give equal
+  text). Anything that old readers cannot understand needs a new `version`, with the old one still read
+  or refused by name; do not loosen a rule to make an input pass. A save is all or nothing (temporary file,
+  then rename). `MapEditor::resize` and `replace` must keep every side within `1..world::kMaxMapSide`.
+- Everything the editor decides is in `editor` (the model) and `view::EditorController` (input to edits):
+  both are tested without a display, with plain `InputEvents`. `rendering` only translates SDL events into
+  `PointerAction`s and `EditorCommand`s, in the order they happened, and must not decide anything. Anything
+  that throws the map away (load, a predefined layout, quit) must ask first when there are unsaved changes
+  (`mayDiscard`), and a map file that fails to load must leave the editor exactly as it was. The apps never
+  start the editor on a blank map in place of a file that exists but cannot be read.
 
 ### Deterministic tests and behaviour
 
@@ -149,7 +169,9 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   `SimulationRunner` and the GUI sleep.
 - Tests must not depend on real time for correctness. Threaded tests wait on `waitForTick` (with a
   generous timeout), never on fixed sleeps; sleeps are allowed only to check that something does *not* happen.
-- Tests are not allowed to touch the network, the display, or files outside the build tree.
+- Tests are not allowed to touch the network, the display, or files outside the build tree. Tests that
+  need files use `tests/scratch_dir.hpp` (`ScratchDir`), which creates a uniquely named directory below
+  the working directory (the build tree under ctest) and removes it again.
 - Fix bugs by adding a regression test first or alongside. Never weaken or delete a test to make it pass.
 
 ### Memory safety and resource cleanup
@@ -185,7 +207,9 @@ ctest --preset default
 build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
 build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # GUI smoke test, no window
-# (ctest also runs the headless CLI on every layout and checks that equal seeds give equal output)
+SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-map.json --layout compact --frames 30
+# (ctest also runs the headless CLI on every layout and on a map file, checks that equal seeds give
+# equal output, and that invalid maps are refused)
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan   # ASan + UBSan
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan   # ThreadSanitizer
 cmake --preset tidy && cmake --build --preset tidy                          # clang-tidy

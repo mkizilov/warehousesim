@@ -69,6 +69,12 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
         run: build/${{ matrix.preset }}/apps/warehousesim_gui --frames 30
+      - name: Map editor smoke run (SDL dummy video driver; nothing is saved)
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: |
+          build/${{ matrix.preset }}/apps/warehousesim_editor --file "$RUNNER_TEMP/smoke-map.json" \
+            --layout compact --frames 30
 
   sanitizers:
     name: sanitizers (${{ matrix.preset }})

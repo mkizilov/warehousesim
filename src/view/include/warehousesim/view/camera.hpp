@@ -92,6 +92,9 @@ class Camera {
   // Changes the window size. A fitted camera re-fits; otherwise zoom and centre are kept.
   // Negative sizes are treated as zero (e.g. a minimised window).
   void resize(ScreenSize screen);
+  // Looks at another grid (the map was resized or replaced). A fitted camera re-fits; otherwise
+  // zoom and centre are kept, the centre moved back inside the new grid if it fell outside.
+  void setGrid(world::GridSize grid);
   // Shows the whole grid, centred, with kFitMarginPixels around it.
   void fit();
   // Moves the content by (dx, dy) pixels on screen, as when dragging the map with the mouse.

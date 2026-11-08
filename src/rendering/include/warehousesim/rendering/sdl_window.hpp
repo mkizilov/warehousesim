@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -8,6 +9,11 @@
 #include "warehousesim/view/view_controller.hpp"
 
 namespace warehousesim::rendering {
+
+// Which program is reading the input. The simulation view pans with a drag of any mouse button and
+// ignores clicks and editing keys; the map editor paints with the left and right buttons, pans with
+// the middle one, and turns its keys into commands (see view::EditorController).
+enum class PollMode : std::uint8_t { Simulation, Editor };
 
 // RAII wrapper for an SDL3 window and renderer. SDL types stay out of this header, and
 // everything is released in reverse order of creation (renderer, window, then SDL itself),
@@ -26,7 +32,7 @@ class SdlWindow {
 
   // Drains the SDL event queue and returns what the user did, in render-pixel coordinates.
   // Closing the window or pressing Escape sets `quit`.
-  [[nodiscard]] view::InputEvents pollEvents();
+  [[nodiscard]] view::InputEvents pollEvents(PollMode mode = PollMode::Simulation);
 
   // Current drawable size in render pixels; changes when the window is resized.
   [[nodiscard]] view::ScreenSize renderSize() const;

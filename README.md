@@ -6,9 +6,11 @@ headless library and CLI plus a separate SDL3 visualisation.
 ```
 core ← world ← planning ┐
 core ← robots ──────────┴← tasks ┐
-        world, robots ← traffic ─┴← simulation ← view (no SDL) ← rendering (SDL3) ← apps/gui
-                                       ↑
-                                  apps/cli (headless)
+        world, robots ← traffic ─┴← simulation ┐
+                                       ↑       ├← view (no SDL) ← rendering (SDL3) ← apps/gui, apps/editor
+                                  apps/cli     │
+                                (headless)     │
+        world ← mapio (map files) ← editor ────┘
 ```
 
 | Module       | Contents                                                                  |
@@ -20,8 +22,10 @@ core ← robots ──────────┴← tasks ┐
 | `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
-| `simulation` | `Simulation` tick engine, `SimulationRunner` thread, JSON, demo scenario  |
-| `view`       | `Camera`, `buildScene()` draw lists, `ViewController`; no SDL, fully tested |
+| `simulation` | `Simulation` tick engine, `SimulationRunner` thread, JSON, scenarios      |
+| `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing (see Map editor) |
+| `editor`     | `MapEditor` editing model (tools, strokes, undo, resize) and its file glue; no SDL, no GUI |
+| `view`       | `Camera`, `buildScene()` and `buildEditorScene()` draw lists, `ViewController`, `EditorController`; no SDL, fully tested |
 | `rendering`  | SDL3 `SdlWindow` (RAII): turns SDL events into `InputEvents`, runs a draw list |
 
 ## Build
@@ -57,6 +61,11 @@ The `world` module is independent of SDL, JSON and the simulation (its tests bui
 - **Predefined layouts** (`world::predefinedLayouts()`, also `--layout` in the apps):
   `demo` (20x12 open hall), `compact` (12x8 walled room, all six cell types), `fulfilment` (28x16 walled
   hall: pickup column, dropoff row, chargers, six shelf rows).
+- **Readiness:** `world::checkLayout()` says whether a layout can host a simulation: it needs a walkable
+  cell, a dropoff and a source of goods (a pickup, or a free cell beside a shelf), and it warns if the
+  walkable cells fall into separate regions. `world::kMaxMapSide` (512) is the longest side accepted for
+  a layout that comes from outside the program. The map editor is built on this module without the
+  module knowing about it.
 
 ## Run
 
@@ -65,9 +74,15 @@ build/default/apps/warehousesim_cli --ticks 200 --seed 1     # headless; prints 
 build/default/apps/warehousesim_cli --layout compact         # demo, compact or fulfilment
 build/default/apps/warehousesim_gui --layout fulfilment --speed 2 --fps 60
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # render without a display
+build/default/apps/warehousesim_editor --file my-hall.json               # edit (or start) a map file
+build/default/apps/warehousesim_cli --map my-hall.json --ticks 500       # run a map made with it
 ```
 
-`warehousesim_gui` options: `--seed N`, `--layout NAME`, `--tick-ms N` (fixed simulation step, default
+Both `warehousesim_cli` and `warehousesim_gui` take `--map FILE` instead of `--layout NAME` (not both).
+A map that is missing, invalid or cannot host a simulation is refused with every problem listed and
+exit status 1; an unknown layout or conflicting options exit with status 2.
+
+`warehousesim_gui` options: `--seed N`, `--layout NAME` or `--map FILE`, `--tick-ms N` (fixed simulation step, default
 100 ms of real time at speed 1), `--speed X` (initial playback speed, 1/16 to 64), `--fps N` (frame cap,
 default 60), `--frames N` (exit after N frames; 0 = until closed).
 
@@ -518,6 +533,112 @@ cells a moving vehicle has claimed ahead of itself).
 
 Text is drawn with SDL's built-in 8x8 debug font. Hovering a robot shows its state, goal and battery in
 the status bar.
+
+## Map editor and map files
+
+`warehousesim_editor` is an interactive editor for warehouse layouts, built with the GUI (SDL3).
+
+```sh
+warehousesim_editor --file my-hall.json                 # opens the file if it exists, else starts a new 20 x 12 map
+warehousesim_editor --file my-hall.json --width 40 --height 25     # a new blank map of that size
+warehousesim_editor --file my-hall.json --layout fulfilment        # a new map that starts as a predefined layout
+```
+
+An existing file is opened as it is (`--layout`, `--width` and `--height` only apply to a new map and are
+refused otherwise). A file that exists but is not a valid map is an error that lists its problems; the
+editor never starts on a blank map in its place, because a later save would overwrite it.
+
+| Input | Action |
+|-------|--------|
+| left button (drag) | paint with the selected tool; a whole drag is one undo step and fast drags leave no gaps |
+| right button (drag) | erase |
+| `1` `2` `3` `4` `5` `6` | tool: wall, shelf, pickup, dropoff, charging station, erase |
+| Shift + arrow keys | make the map one cell wider / narrower / taller / shorter (hold for key repeat) |
+| Ctrl+Z, Ctrl+Y (Ctrl+Shift+Z) | undo / redo (the last 100 steps; on a Mac use Cmd) |
+| Ctrl+S, Ctrl+O | save to / load from the `--file` path |
+| `L` | load the next predefined layout (`demo`, `compact`, `fulfilment`, then around) |
+| Delete or Backspace | clear the map (undoable) |
+| middle button drag, WASD or arrows, wheel or `+`/`-`, `0` | pan, zoom, fit the whole map |
+| Esc, closing the window | quit |
+
+The bottom bar shows the file (with `*` when there are unsaved changes), the size, zoom, tool and the cell
+under the pointer, the palette, the last message, and whether the map is ready for a simulation. Loading
+a file or a predefined layout over unsaved changes, and quitting with them, need the same key twice in a
+row; the first press only asks. Anything else in between takes the question back. Shrinking the map crops
+it and says how many objects were cut off (undo brings them back). The editor does not run the
+simulation: save the map and run it with `warehousesim_gui --map FILE`.
+
+### The file format
+
+A map is one JSON object, version 1 (`mapio/map_file.hpp` is the authority; this is the same text):
+
+```json
+{
+  "format": "warehousesim-map",
+  "version": 1,
+  "name": "my hall",
+  "width": 12,
+  "height": 8,
+  "walls": [
+    [0, 0], [1, 0], [2, 0]
+  ],
+  "shelves": [[3, 2], [4, 2]],
+  "pickups": [[1, 1]],
+  "dropoffs": [[10, 6]],
+  "chargers": [[1, 6], [2, 6]]
+}
+```
+
+| Key | Required | Rule |
+|-----|----------|------|
+| `format` | yes | exactly `"warehousesim-map"` |
+| `version` | yes | the integer `1`; any other number is refused as unsupported (and nothing else about such a document is judged, since another version may have another shape) |
+| `name` | no | text, at most 80 bytes, no control characters |
+| `width`, `height` | yes | integers from 1 to 512 |
+| `walls`, `shelves`, `pickups`, `dropoffs`, `chargers` | no | lists of `[x, y]` pairs of integers; `x` is the column and `y` the row, both from 0 at the top left |
+
+A cell may appear once, in one list only; a cell in no list is open floor. Reading is strict and
+reports every problem it can find (up to 20, then a count) with a JSON Pointer to the place:
+
+```
+/width: must be from 1 to 512, not 0
+/walls/3: cell (25, 2) is outside the 20 x 12 grid
+/shelves/0: cell (4, 4) is already listed as a wall at /walls/1
+/robots: unknown key; the keys of a map are: format, version, name, width, height, walls, ...
+```
+
+Refused: text that is not JSON (or has trailing text, or invalid UTF-8), a document that is not an object,
+unknown or duplicate keys, wrong types (including `2.0` or `"20"` for an integer), dimensions outside
+1..512, cells outside the grid, cells listed twice, malformed pairs, over-long or control-character
+names, documents nested more than 4 levels deep (refused before anything is built from them) and
+documents over 4 MB. Whether a map can *host a simulation* is a separate question, answered by
+`world::checkLayout()`: a map with no dropoff or nothing to collect is valid and can be saved, but the
+editor says it is not ready and `--map` refuses to run it.
+
+Writing is canonical: cells are listed row by row, the lists wrap at 100 columns, and equal documents give
+identical text, so `parse(serialize(d)) == d` and saving a loaded map changes nothing. A save writes
+`FILE.tmp` completely and then renames it over `FILE`, so a failure never leaves a half-written map
+under the real name. A change that old readers cannot understand gets a new `version`.
+
+A map holds the layout only. Robot start positions are derived when it is run: on its charging stations
+(up to four) if it has any, otherwise on open floor, spaced out. Robots then have a battery model only
+if the map has chargers.
+
+### How it is built
+
+`world` knows nothing about editing or files (`world::checkLayout` and `kMaxMapSide` are the only
+additions, and are pure functions of a layout). `mapio` is the only place that knows JSON for maps
+(nlohmann_json is private to it). `editor::MapEditor` edits a `world::Warehouse` through its public
+interface and has no idea of windows, mouse or files; `editor_files` connects it to `mapio` and the
+predefined layouts. `view::EditorController` turns SDL-free `InputEvents` (pointer presses, moves and
+releases in the order they happened, and key commands) into edits, and `buildEditorScene()` draws it as
+the same plain `DrawList` the simulation view uses. `rendering::SdlWindow::pollEvents(PollMode::Editor)`
+only translates SDL events into those types, so everything the editor does is tested without a display.
+
+Limits: the editor has no text entry, so the file path comes from `--file` and the name from the file
+(or the file's name); the map changes size one cell at a time; there is no rectangle or fill tool (only
+freehand drags); undo keeps 100 steps; a layout whose walkable cells form separate regions is
+accepted with a warning, and tasks between the regions can never be done.
 
 ## Behaviour notes
 
