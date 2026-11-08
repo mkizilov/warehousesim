@@ -25,10 +25,16 @@ json toJson(const world::Warehouse& warehouse) {
 json toJson(const Snapshot& snapshot) {
   json robotsJson = json::array();
   for (const RobotSnapshot& robot : snapshot.robots) {
-    robotsJson.push_back({{"id", robot.id.value},
-                          {"position", pointToJson(robot.position)},
-                          {"status", robots::toString(robot.status)},
-                          {"task", optionalIdToJson(robot.task)}});
+    robotsJson.push_back(
+        {{"id", robot.id.value},
+         {"position", pointToJson(robot.position)},
+         {"heading", core::toString(robot.heading)},
+         {"state", robots::toString(robot.state)},
+         {"goal", robot.goal == robots::NavigationGoal::None ? json(nullptr)
+                                                             : json(robots::toString(robot.goal))},
+         {"speed", robot.speed},
+         {"battery", {{"level", robot.batteryLevel}, {"capacity", robot.batteryCapacity}}},
+         {"task", optionalIdToJson(robot.task)}});
   }
   json tasksJson = json::array();
   for (const tasks::Task& task : snapshot.activeTasks) {

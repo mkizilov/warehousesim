@@ -27,7 +27,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 |--------------|-------------------------------------------------------|--------------------------------------|
 | `core`       | points, ids, clock, deterministic RNG                 | std only                             |
 | `world`      | grid model: cell types, static layout, robot occupancy, predefined layouts | core            |
-| `robots`     | robot state and movement along a path                 | core                                 |
+| `robots`     | robot entity: pose, battery, task, path, state machine | core                                |
 | `planning`   | `PathPlanner` interface, A*                           | core, world                          |
 | `tasks`      | task lifecycle, assignment, task generation           | core, robots                         |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
@@ -49,6 +49,16 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 - The simulation advances by a fixed timestep (`core::FixedTimestep`, driven by `SimulationRunner` on its
   own thread), never by frame time. Frame rate, window resizing and rendering speed must not change what
   the simulation computes. Robot behaviour is out of scope for the view code: it only displays state.
+- Robot behaviour lives in `robots` (the entity and its state machine) and `simulation` (the decisions
+  that need the world, planner and tasks). A robot changes state only through `Robot`'s named operations,
+  which validate the transition table and throw `InvalidTransition` without changing anything; never
+  assign state fields directly. Keep `Robot::inconsistency()` and `isValidTransition` in step with any
+  new state or field, and extend the tests in `tests/robots_test.cpp` (they run in a target linked
+  against `core` and `robots` only). Battery and energy are integer units; do not introduce
+  floating-point accumulation into anything that affects simulation outcomes (motion progress is the one
+  exception and is compared with an epsilon).
+- The default `RobotSpec` is the idealised robot that the pre-state-machine tests assume. Do not change
+  its defaults; give scenarios their own spec instead.
 - Depend on interfaces at module seams (`PathPlanner`, `TaskAssigner`) and inject implementations through
   constructors. No global or singleton state.
 - Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them

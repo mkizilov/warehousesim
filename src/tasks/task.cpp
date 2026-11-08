@@ -43,6 +43,11 @@ void TaskBoard::assign(core::TaskId id, core::RobotId robot) {
   mutableTask(id).assignee = robot;
 }
 
+void TaskBoard::release(core::TaskId id) {
+  transition(id, TaskStatus::Assigned, TaskStatus::Pending);
+  mutableTask(id).assignee.reset();
+}
+
 void TaskBoard::markInProgress(core::TaskId id) {
   transition(id, TaskStatus::Assigned, TaskStatus::InProgress);
 }

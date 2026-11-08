@@ -56,6 +56,27 @@ TEST(TaskBoardTest, HappyPathLifecycle) {
   EXPECT_EQ(board.count(TaskStatus::Pending), 0U);
 }
 
+TEST(TaskBoardTest, ReleaseReturnsAnAssignedTaskToPending) {
+  TaskBoard board;
+  const TaskId id = board.submit(P(0, 0), P(1, 0), 0);
+  board.assign(id, RobotId{2});
+  board.release(id);
+  EXPECT_EQ(board.find(id)->status, TaskStatus::Pending);
+  EXPECT_FALSE(board.find(id)->assignee.has_value());
+  board.assign(id, RobotId{3});  // can be given to someone else
+  EXPECT_EQ(board.find(id)->assignee, RobotId{3});
+}
+
+TEST(TaskBoardTest, OnlyAssignedTasksCanBeReleased) {
+  TaskBoard board;
+  const TaskId id = board.submit(P(0, 0), P(1, 0), 0);
+  EXPECT_THROW(board.release(id), std::logic_error);  // still pending
+  board.assign(id, RobotId{1});
+  board.markInProgress(id);
+  EXPECT_THROW(board.release(id), std::logic_error);  // already collected
+  EXPECT_THROW(board.release(TaskId{9}), std::out_of_range);
+}
+
 TEST(TaskBoardTest, InvalidTransitionsThrow) {
   TaskBoard board;
   const TaskId id = board.submit(P(0, 0), P(1, 0), 0);
@@ -94,13 +115,38 @@ TEST(NearestRobotAssignerTest, TiesGoToLowestRobotId) {
 
 TEST(NearestRobotAssignerTest, SkipsBusyRobotsAndNonPendingTasks) {
   std::vector<Robot> robots = {Robot(RobotId{1}, P(0, 0)), Robot(RobotId{2}, P(1, 0))};
-  robots[0].beginTask(TaskId{1});
+  robots[0].beginTask(TaskId{1}, P(0, 0), {});
   TaskBoard board;
   const TaskId assigned = board.submit(P(0, 0), P(1, 1), 0);
   board.assign(assigned, RobotId{1});
   board.submit(P(2, 0), P(1, 1), 0);
   const auto result = NearestRobotAssigner{}.assign(robots, board.all());
   const std::vector<Assignment> expected = {{RobotId{2}, TaskId{2}}};
+  EXPECT_EQ(result, expected);
+}
+
+TEST(NearestRobotAssignerTest, SkipsRobotsThatNeedACharge) {
+  warehousesim::robots::RobotSpec lowSpec;
+  lowSpec.lowBatteryLevel = 2000;
+  lowSpec.initialCharge = 1500;  // below the reserve
+  const std::vector<Robot> robots = {Robot(RobotId{1}, P(0, 0), lowSpec),
+                                     Robot(RobotId{2}, P(9, 9))};
+  TaskBoard board;
+  board.submit(P(0, 1), P(0, 0), 0);
+  const auto result = NearestRobotAssigner{}.assign(robots, board.all());
+  const std::vector<Assignment> expected = {{RobotId{2}, TaskId{1}}};  // robot 1 is closer but low
+  EXPECT_EQ(result, expected);
+}
+
+TEST(NearestRobotAssignerTest, SkipsUnavailableAndChargingRobots) {
+  std::vector<Robot> robots = {Robot(RobotId{1}, P(0, 0)), Robot(RobotId{2}, P(0, 1)),
+                               Robot(RobotId{3}, P(9, 9))};
+  robots[0].makeUnavailable();
+  robots[1].beginCharging();
+  TaskBoard board;
+  board.submit(P(0, 0), P(1, 1), 0);
+  const auto result = NearestRobotAssigner{}.assign(robots, board.all());
+  const std::vector<Assignment> expected = {{RobotId{3}, TaskId{1}}};
   EXPECT_EQ(result, expected);
 }
 

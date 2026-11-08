@@ -1,5 +1,6 @@
 #include "warehousesim/view/scene.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -23,6 +24,8 @@ constexpr Color kPendingTask{240, 210, 60};
 constexpr Color kActiveTask{90, 200, 230};
 constexpr Color kLetter{15, 15, 15};
 constexpr Color kRobotId{255, 255, 255};
+constexpr Color kHeadingMarker{250, 250, 250};
+constexpr Color kGaugeBackground{20, 20, 24};
 constexpr Color kPanel{30, 33, 41};
 constexpr Color kPanelText{200, 205, 215};
 constexpr Color kPausedText{255, 120, 100};
@@ -30,6 +33,13 @@ constexpr Color kPausedText{255, 120, 100};
 ScreenRect inset(const ScreenRect& rect, double fraction) {
   const double margin = rect.width * fraction;
   return {rect.x + margin, rect.y + margin, rect.width - 2.0 * margin, rect.height - 2.0 * margin};
+}
+
+Color batteryColor(double fraction) {
+  if (fraction < 0.25) {
+    return {220, 60, 60};
+  }
+  return fraction < 0.5 ? Color{230, 190, 60} : Color{80, 200, 100};
 }
 
 int digitCount(std::int32_t value) { return static_cast<int>(std::to_string(value).size()); }
@@ -104,7 +114,8 @@ void addTaskMarkers(DrawList& list, const simulation::Snapshot& snapshot, const 
   }
 }
 
-// Placeholders only: a coloured square per robot (state colour) with its id when there is room.
+// A coloured square per robot (colour = state), a nub on the edge it is facing, and, when there
+// is room, its id and a battery gauge. Purely a picture of the snapshot; no behaviour lives here.
 void addRobots(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
                const CellRange& range) {
   for (const simulation::RobotSnapshot& robot : snapshot.robots) {
@@ -112,9 +123,39 @@ void addRobots(DrawList& list, const simulation::Snapshot& snapshot, const Camer
       continue;
     }
     const ScreenRect rect = inset(camera.cellRect(robot.position), 0.15);
-    list.commands.emplace_back(FillRect{rect, robotColor(robot.status)});
+    list.commands.emplace_back(FillRect{rect, robotColor(robot.state, robot.goal)});
+
+    if (camera.zoom() >= kMinZoomForHeading) {
+      const double nub = rect.width * 0.25;
+      const double centerX = rect.x + (rect.width - nub) / 2.0;
+      const double centerY = rect.y + (rect.height - nub) / 2.0;
+      ScreenRect marker{centerX, centerY, nub, nub};
+      switch (robot.heading) {
+        case core::Direction::North:
+          marker.y = rect.y;
+          break;
+        case core::Direction::East:
+          marker.x = rect.right() - nub;
+          break;
+        case core::Direction::South:
+          marker.y = rect.bottom() - nub;
+          break;
+        case core::Direction::West:
+          marker.x = rect.x;
+          break;
+      }
+      list.commands.emplace_back(FillRect{marker, kHeadingMarker});
+    }
+
     if (camera.zoom() >= kMinZoomForRobotIds) {
       list.commands.emplace_back(centeredText(rect, std::to_string(robot.id.value), kRobotId));
+      const double barHeight = std::max(2.0, rect.height * 0.12);
+      const double fraction =
+          static_cast<double>(robot.batteryLevel) / static_cast<double>(robot.batteryCapacity);
+      const ScreenRect gauge{rect.x, rect.bottom() - barHeight, rect.width, barHeight};
+      list.commands.emplace_back(FillRect{gauge, kGaugeBackground});
+      list.commands.emplace_back(FillRect{{gauge.x, gauge.y, gauge.width * fraction, gauge.height},
+                                          batteryColor(fraction)});
     }
   }
 }
@@ -184,14 +225,29 @@ Color cellColor(world::CellType type) {
   return kFloor;
 }
 
-Color robotColor(robots::RobotStatus status) {
-  switch (status) {
-    case robots::RobotStatus::Idle:
+Color robotColor(robots::RobotState state, robots::NavigationGoal goal) {
+  switch (state) {
+    case robots::RobotState::Idle:
       return {80, 140, 240};
-    case robots::RobotStatus::ToPickup:
+    case robots::RobotState::Navigating:
+      switch (goal) {
+        case robots::NavigationGoal::Dropoff:
+          return {220, 70, 100};
+        case robots::NavigationGoal::Charger:
+          return {170, 210, 70};
+        case robots::NavigationGoal::Pickup:
+        case robots::NavigationGoal::None:
+          return {240, 150, 40};
+      }
       return {240, 150, 40};
-    case robots::RobotStatus::ToDropoff:
-      return {220, 70, 100};
+    case robots::RobotState::Loading:
+      return {230, 190, 70};
+    case robots::RobotState::Unloading:
+      return {200, 110, 220};
+    case robots::RobotState::Charging:
+      return {70, 200, 140};
+    case robots::RobotState::Unavailable:
+      return {110, 110, 115};
   }
   return kFloor;
 }
@@ -232,7 +288,13 @@ std::array<std::string, 2> statusLines(const world::Warehouse& warehouse,
     first << '(' << cell->x << ',' << cell->y << ") " << world::toString(warehouse.at(*cell));
     for (const simulation::RobotSnapshot& robot : snapshot.robots) {
       if (robot.position == *cell) {
-        first << " robot " << robot.id.value;
+        first << " robot " << robot.id.value << ' ' << robots::toString(robot.state);
+        if (robot.goal != robots::NavigationGoal::None) {
+          first << "->" << robots::toString(robot.goal);
+        }
+        first << ' '
+              << (robot.batteryLevel * 100ULL + robot.batteryCapacity / 2) / robot.batteryCapacity
+              << '%';
       }
     }
   } else {

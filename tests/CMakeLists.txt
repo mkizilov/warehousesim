@@ -27,13 +27,18 @@ warehousesim_add_test(warehousesim_world_tests
     world_model_test.cpp
   LIBS warehousesim::world)
 
+# Linked against core and robots only: the robot entity and its state machine need no world,
+# planner, simulation, rendering or SDL.
+warehousesim_add_test(warehousesim_robot_tests
+  SOURCES robots_test.cpp
+  LIBS warehousesim::robots)
+
 # Camera, scene and view-controller tests need no SDL or display, so they build and run even
 # when WAREHOUSESIM_BUILD_GUI is OFF.
 warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
     planning_test.cpp
-    robots_test.cpp
     runner_test.cpp
     scene_test.cpp
     simulation_test.cpp

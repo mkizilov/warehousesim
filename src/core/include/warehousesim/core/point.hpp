@@ -36,6 +36,20 @@ enum class Direction : std::uint8_t { North, East, South, West };
 inline constexpr std::array<Direction, 4> kAllDirections{Direction::North, Direction::East,
                                                          Direction::South, Direction::West};
 
+[[nodiscard]] constexpr const char* toString(Direction direction) noexcept {
+  switch (direction) {
+    case Direction::North:
+      return "north";
+    case Direction::East:
+      return "east";
+    case Direction::South:
+      return "south";
+    case Direction::West:
+      return "west";
+  }
+  return "unknown";
+}
+
 [[nodiscard]] constexpr Point offsetOf(Direction direction) noexcept {
   return kCardinalDirections[static_cast<std::size_t>(direction)];
 }

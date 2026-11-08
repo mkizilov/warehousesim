@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +25,8 @@
 namespace {
 
 using warehousesim::core::Point;
-using warehousesim::robots::RobotStatus;
+using warehousesim::robots::NavigationGoal;
+using warehousesim::robots::RobotState;
 using warehousesim::simulation::RobotSnapshot;
 using warehousesim::simulation::Snapshot;
 using warehousesim::tasks::Task;
@@ -233,38 +235,112 @@ TEST(SceneTest, CellsOutsideTheWindowAreNotEmitted) {
 
 // ---- robot placeholders and tasks -------------------------------------------------------
 
-Snapshot snapshotWithRobot(Point at, RobotStatus status, std::uint32_t id = 7) {
+// What a robot is doing, as the snapshot reports it.
+struct Look {
+  RobotState state;
+  NavigationGoal goal;
+};
+constexpr Look kIdle{RobotState::Idle, NavigationGoal::None};
+constexpr Look kToPickup{RobotState::Navigating, NavigationGoal::Pickup};
+constexpr Look kToDropoff{RobotState::Navigating, NavigationGoal::Dropoff};
+
+Snapshot snapshotWithRobot(Point at, Look look, std::uint32_t id = 7) {
   Snapshot snapshot;
-  snapshot.robots.push_back(
-      RobotSnapshot{warehousesim::core::RobotId{id}, at, status, std::nullopt});
+  RobotSnapshot robot;
+  robot.id = warehousesim::core::RobotId{id};
+  robot.position = at;
+  robot.state = look.state;
+  robot.goal = look.goal;
+  robot.batteryLevel = 4000;
+  robot.batteryCapacity = 10000;
+  snapshot.robots.push_back(robot);
   return snapshot;
 }
 
 TEST(SceneTest, RobotsAreColouredSquaresInsideTheirCell) {
   const Camera camera = smallCamera();
-  const DrawList list =
-      sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), RobotStatus::ToPickup), camera);
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), kToPickup), camera);
   const ScreenRect expected = inset(camera.cellRect(P(1, 0)), 0.15);
   const auto index = indexOfFill(list, expected);
   ASSERT_TRUE(index.has_value());
   EXPECT_EQ(std::get<FillRect>(list.commands[*index]).color,
-            warehousesim::view::robotColor(RobotStatus::ToPickup));
+            warehousesim::view::robotColor(kToPickup.state, kToPickup.goal));
   EXPECT_TRUE(expected.x > camera.cellRect(P(1, 0)).x);
   EXPECT_TRUE(expected.right() < camera.cellRect(P(1, 0)).right());
 }
 
-TEST(SceneTest, RobotColourFollowsItsState) {
-  const Color idle = warehousesim::view::robotColor(RobotStatus::Idle);
-  const Color toPickup = warehousesim::view::robotColor(RobotStatus::ToPickup);
-  const Color toDropoff = warehousesim::view::robotColor(RobotStatus::ToDropoff);
-  EXPECT_NE(idle, toPickup);
-  EXPECT_NE(idle, toDropoff);
-  EXPECT_NE(toPickup, toDropoff);
+TEST(SceneTest, EveryRobotStateAndGoalHasItsOwnColour) {
+  using warehousesim::view::robotColor;
+  std::set<std::string> seen;
+  const auto key = [](Color c) {
+    return std::to_string(c.r) + "," + std::to_string(c.g) + "," + std::to_string(c.b);
+  };
+  seen.insert(key(robotColor(RobotState::Idle, NavigationGoal::None)));
+  seen.insert(key(robotColor(RobotState::Loading, NavigationGoal::None)));
+  seen.insert(key(robotColor(RobotState::Unloading, NavigationGoal::None)));
+  seen.insert(key(robotColor(RobotState::Charging, NavigationGoal::None)));
+  seen.insert(key(robotColor(RobotState::Unavailable, NavigationGoal::None)));
+  seen.insert(key(robotColor(RobotState::Navigating, NavigationGoal::Pickup)));
+  seen.insert(key(robotColor(RobotState::Navigating, NavigationGoal::Dropoff)));
+  seen.insert(key(robotColor(RobotState::Navigating, NavigationGoal::Charger)));
+  EXPECT_EQ(seen.size(), 8U);
+}
+
+TEST(SceneTest, ARobotShowsWhichWayItIsFacing) {
+  const Camera camera = smallCamera(40.0);
+  const ScreenRect body = inset(camera.cellRect(P(1, 0)), 0.15);
+  struct Case {
+    warehousesim::core::Direction heading;
+    double nubX;
+    double nubY;
+  };
+  const double nub = body.width * 0.25;
+  const double middleX = body.x + (body.width - nub) / 2.0;
+  const double middleY = body.y + (body.height - nub) / 2.0;
+  const std::vector<Case> cases = {
+      {warehousesim::core::Direction::North, middleX, body.y},
+      {warehousesim::core::Direction::East, body.right() - nub, middleY},
+      {warehousesim::core::Direction::South, middleX, body.bottom() - nub},
+      {warehousesim::core::Direction::West, body.x, middleY},
+  };
+  for (const Case& c : cases) {
+    Snapshot snapshot = snapshotWithRobot(P(1, 0), kIdle);
+    snapshot.robots[0].heading = c.heading;
+    const DrawList list = sceneOf(smallWarehouse(), snapshot, camera);
+    EXPECT_TRUE(indexOfFill(list, ScreenRect{c.nubX, c.nubY, nub, nub}).has_value());
+  }
+}
+
+TEST(SceneTest, HeadingMarkerIsOmittedWhenFarZoomedOut) {
+  const Camera camera = smallCamera(8.0);
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), kIdle), camera);
+  const ScreenRect body = inset(camera.cellRect(P(1, 0)), 0.15);
+  const double nub = body.width * 0.25;
+  EXPECT_FALSE(indexOfFill(list, ScreenRect{body.x + (body.width - nub) / 2.0, body.y, nub, nub})
+                   .has_value());
+}
+
+TEST(SceneTest, BatteryGaugeShowsTheChargeFractionWhenThereIsRoom) {
+  const Camera camera = smallCamera(40.0);
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), kIdle), camera);
+  const ScreenRect body = inset(camera.cellRect(P(1, 0)), 0.15);
+  const double barHeight = std::max(2.0, body.height * 0.12);
+  const double barY = body.bottom() - barHeight;
+  // 4000 / 10000 = 40% full.
+  EXPECT_TRUE(indexOfFill(list, ScreenRect{body.x, barY, body.width, barHeight}).has_value());
+  EXPECT_TRUE(indexOfFill(list, ScreenRect{body.x, barY, body.width * 0.4, barHeight}).has_value());
+
+  const Camera far = smallCamera(10.0);
+  const DrawList small = sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), kIdle), far);
+  const ScreenRect smallBody = inset(far.cellRect(P(1, 0)), 0.15);
+  EXPECT_FALSE(
+      indexOfFill(small, ScreenRect{smallBody.x, smallBody.bottom() - 2.0, smallBody.width, 2.0})
+          .has_value());
 }
 
 TEST(SceneTest, RobotIdIsPrintedOnlyWhenThereIsRoom) {
   const Warehouse w = smallWarehouse();
-  const Snapshot snapshot = snapshotWithRobot(P(1, 0), RobotStatus::Idle, 7);
+  const Snapshot snapshot = snapshotWithRobot(P(1, 0), kIdle, 7);
   auto hasId = [&](double zoom) {
     for (const Text& text : texts(sceneOf(w, snapshot, smallCamera(zoom)))) {
       if (text.text == "7") {
@@ -285,8 +361,7 @@ TEST(SceneTest, RobotsOutsideTheWindowAreSkipped) {
   Camera camera(ScreenSize{100, 100}, warehousesim::world::GridSize(3, 2));
   camera.setZoom(40.0);
   camera.centerOn({0.5, 0.5});
-  const DrawList list =
-      sceneOf(smallWarehouse(), snapshotWithRobot(P(2, 1), RobotStatus::Idle), camera);
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRobot(P(2, 1), kIdle), camera);
   EXPECT_FALSE(indexOfFill(list, inset(camera.cellRect(P(2, 1)), 0.15)).has_value());
 }
 
@@ -314,8 +389,7 @@ TEST(SceneTest, TaskMarkersShowPickupUntilCollectedAndDropoffUntilDelivered) {
 
 TEST(SceneTest, LayersAreOrderedGridThenRobotsThenRulersThenStatusBar) {
   const Camera camera = smallCamera();
-  const DrawList list =
-      sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), RobotStatus::Idle), camera);
+  const DrawList list = sceneOf(smallWarehouse(), snapshotWithRobot(P(1, 0), kIdle), camera);
   const auto wall = indexOfFill(list, camera.cellRect(P(0, 0)));
   const auto robot = indexOfFill(list, inset(camera.cellRect(P(1, 0)), 0.15));
   const auto topRuler = indexOfFill(list, ScreenRect{0.0, 0.0, 300.0, 14.0});
@@ -429,7 +503,7 @@ TEST(SceneTest, RulerLabelsStayClearOfTheRulerStripsAndStatusBar) {
 
 TEST(SceneTest, StatusLinesReportTickSpeedZoomAndCounts) {
   const Warehouse w = smallWarehouse();
-  Snapshot snapshot = snapshotWithRobot(P(1, 0), RobotStatus::Idle, 3);
+  Snapshot snapshot = snapshotWithRobot(P(1, 0), kIdle, 3);
   snapshot.tick = 42;
   snapshot.completedTasks = 5;
   snapshot.failedTasks = 1;
@@ -459,7 +533,7 @@ TEST(SceneTest, StatusLinesFormatFractionalSpeedsAndPause) {
 TEST(SceneTest, StatusLinesDescribeTheCellUnderThePointer) {
   const Camera camera = smallCamera();
   const Warehouse w = smallWarehouse();
-  const Snapshot snapshot = snapshotWithRobot(P(1, 1), RobotStatus::Idle, 9);
+  const Snapshot snapshot = snapshotWithRobot(P(1, 1), kIdle, 9);
   ViewStatus status;
 
   const ScreenRect shelf = camera.cellRect(P(2, 0));
@@ -471,7 +545,11 @@ TEST(SceneTest, StatusLinesDescribeTheCellUnderThePointer) {
   status.pointer = ScreenPoint{dropoff.x + 5.0, dropoff.y + 5.0};
   const std::string onRobot = warehousesim::view::statusLines(w, snapshot, camera, status)[0];
   EXPECT_TRUE(onRobot.find("cell (1,1) dropoff") != std::string::npos);
-  EXPECT_TRUE(onRobot.find("robot 9") != std::string::npos);
+  EXPECT_TRUE(onRobot.find("robot 9 idle 40%") != std::string::npos);
+
+  const Snapshot navigating = snapshotWithRobot(P(1, 1), kToPickup, 4);
+  EXPECT_TRUE(warehousesim::view::statusLines(w, navigating, camera, status)[0].find(
+                  "robot 4 navigating->pickup 40%") != std::string::npos);
 
   status.pointer = ScreenPoint{5.0, 5.0};  // outside the grid
   EXPECT_TRUE(warehousesim::view::statusLines(w, snapshot, camera, status)[0].find("cell -") !=
@@ -511,7 +589,7 @@ TEST(SceneTest, PausedTextUsesAWarningColour) {
 TEST(SceneTest, SameInputsGiveIdenticalDrawLists) {
   const Warehouse w = smallWarehouse();
   const Camera camera = smallCamera();
-  const Snapshot snapshot = snapshotWithRobot(P(1, 0), RobotStatus::ToDropoff);
+  const Snapshot snapshot = snapshotWithRobot(P(1, 0), kToDropoff);
   const DrawList a = sceneOf(w, snapshot, camera);
   const DrawList b = sceneOf(w, snapshot, camera);
   EXPECT_TRUE(a.commands == b.commands);

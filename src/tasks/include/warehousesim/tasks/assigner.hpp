@@ -23,8 +23,8 @@ class TaskAssigner {
   TaskAssigner& operator=(const TaskAssigner&) = delete;
   virtual ~TaskAssigner() = default;
 
-  // Pure decision: pairs idle robots with pending tasks. Each robot and task appears
-  // at most once in the result. Does not mutate robots or tasks.
+  // Pure decision: pairs available robots (idle, with enough charge) with pending tasks. Each robot
+  // and task appears at most once in the result. Does not mutate robots or tasks.
   [[nodiscard]] virtual std::vector<Assignment> assign(std::span<const robots::Robot> robots,
                                                        std::span<const Task> tasks) const = 0;
 };

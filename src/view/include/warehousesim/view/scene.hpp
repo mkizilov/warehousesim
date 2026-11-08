@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-#include "warehousesim/robots/robot.hpp"
+#include "warehousesim/robots/robot_state.hpp"
 #include "warehousesim/simulation/simulation.hpp"
 #include "warehousesim/view/camera.hpp"
 #include "warehousesim/view/draw_list.hpp"
@@ -23,15 +23,18 @@ struct ViewStatus {
 // bottom; scene content is clipped visually by these strips.
 inline constexpr double kRulerThickness = kGlyphSize + 6.0;
 inline constexpr double kStatusBarHeight = 2.0 * kGlyphSize + 8.0;
-// Below these zooms (pixels per cell) the grid lines, cell letters and robot ids are omitted
+// Below these zooms (pixels per cell) the grid lines, heading markers, cell letters, robot ids
+// and battery gauges are omitted
 // because they would only add clutter.
 inline constexpr double kMinZoomForGridLines = 6.0;
+inline constexpr double kMinZoomForHeading = 10.0;
 inline constexpr double kMinZoomForLetters = 16.0;
 inline constexpr double kMinZoomForRobotIds = 20.0;
 
-// Fill colours for cell types and robot states.
+// Fill colours for cell types and robot states (a navigating robot's colour depends on where
+// it is heading).
 [[nodiscard]] Color cellColor(world::CellType type);
-[[nodiscard]] Color robotColor(robots::RobotStatus status);
+[[nodiscard]] Color robotColor(robots::RobotState state, robots::NavigationGoal goal);
 
 // Smallest label spacing, in cells, from {1, 2, 5, 10, 20, 50, ...} that puts neighbouring
 // coordinate labels at least `minSpacingPixels` apart at this zoom. Returns 1 if the zoom is

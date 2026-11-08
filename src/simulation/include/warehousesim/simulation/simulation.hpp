@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "warehousesim/core/clock.hpp"
@@ -11,6 +12,8 @@
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/planning/path_planner.hpp"
 #include "warehousesim/robots/robot.hpp"
+#include "warehousesim/robots/robot_spec.hpp"
+#include "warehousesim/robots/robot_state.hpp"
 #include "warehousesim/tasks/assigner.hpp"
 #include "warehousesim/tasks/task.hpp"
 #include "warehousesim/tasks/task_generator.hpp"
@@ -23,14 +26,24 @@ struct SimulationConfig {
   // Spawn one random task every N ticks (starting at tick 0); 0 disables spawning.
   core::Tick taskSpawnInterval = 0;
   // A robot blocked this many consecutive ticks makes an idle or lower-priority (higher id)
-  // blocker step aside, or routes around a higher-priority one.
+  // blocker step aside, or routes around a higher-priority one. Robots that are busy in place
+  // (loading, unloading, charging, unavailable) never step aside.
   std::uint32_t maxBlockedTicks = 3;
+  // The model every robot is built from. The default is an idealised robot (see RobotSpec). If
+  // the layout has no charging station, lowBatteryLevel is ignored (set to 0) because a robot
+  // could never recharge.
+  robots::RobotSpec robot;
 };
 
 struct RobotSnapshot {
   core::RobotId id;
   core::Point position;
-  robots::RobotStatus status = robots::RobotStatus::Idle;
+  core::Direction heading = core::Direction::North;
+  robots::RobotState state = robots::RobotState::Idle;
+  robots::NavigationGoal goal = robots::NavigationGoal::None;
+  double speed = 0.0;  // cells per tick
+  robots::Battery::Units batteryLevel = 0;
+  robots::Battery::Units batteryCapacity = 1;
   std::optional<core::TaskId> task;
 
   bool operator==(const RobotSnapshot&) const = default;
@@ -62,6 +75,14 @@ class Simulation {
   // Throws std::invalid_argument unless both locations are walkable.
   core::TaskId submitTask(core::Point pickup, core::Point dropoff);
 
+  // Operator controls. Disabling takes a robot out of service (state Unavailable): a task it
+  // had not collected yet goes back to Pending, a task it was carrying fails. Restoring returns
+  // it to Idle, swapping in a fresh battery first if the old one is flat. Both return false when
+  // the robot is already in the requested condition, and throw std::out_of_range for an
+  // unknown id.
+  bool disableRobot(core::RobotId id);
+  bool restoreRobot(core::RobotId id);
+
   void step();
   void run(core::Tick ticks);
 
@@ -75,17 +96,30 @@ class Simulation {
  private:
   void spawnTask();
   void assignTasks();
-  void moveRobots();
-  void resolveArrival(robots::Robot& robot);
+  void updateRobots();
+  void updateRobot(robots::Robot& robot);
+  void settle(robots::Robot& robot);
+  void arrive(robots::Robot& robot);
+  void finishLoading(robots::Robot& robot);
+  bool dispatchToCharger(robots::Robot& robot);
+  [[nodiscard]] std::optional<std::pair<core::Point, robots::RobotPath>> nearestFreeCharger(
+      const robots::Robot& robot) const;
+  void breakDownIfDepleted(robots::Robot& robot);
+  void moveAlongPath(robots::Robot& robot);
   bool resolveBlock(robots::Robot& robot, core::Point cell);
   bool stepAside(robots::Robot& robot);
   [[nodiscard]] planning::BlockedSet occupiedCells() const;
   bool tryRepath(robots::Robot& robot, const planning::BlockedSet& blocked);
+  bool retargetCharger(robots::Robot& robot);
+  void releaseTask(robots::Robot& robot);
   void failTask(robots::Robot& robot);
+  void abortNavigation(robots::Robot& robot);
+  [[nodiscard]] robots::Robot& robotById(core::RobotId id);
 
   // Kept in lock-step with the robots' own positions: every move goes through world_.
   world::World world_;
   std::vector<robots::Robot> robots_;
+  std::vector<core::Point> chargers_;  // charging cells, row-major
   tasks::TaskBoard tasks_;
   std::unique_ptr<planning::PathPlanner> planner_;
   std::unique_ptr<tasks::TaskAssigner> assigner_;

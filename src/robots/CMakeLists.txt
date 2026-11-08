@@ -1,1 +1,3 @@
-warehousesim_add_module(robots SOURCES robot.cpp PUBLIC_DEPS warehousesim::core)
+warehousesim_add_module(robots
+  SOURCES battery.cpp robot.cpp robot_spec.cpp robot_state.cpp
+  PUBLIC_DEPS warehousesim::core)

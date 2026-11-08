@@ -6,7 +6,7 @@ std::vector<Assignment> NearestRobotAssigner::assign(std::span<const robots::Rob
                                                      std::span<const Task> tasks) const {
   std::vector<const robots::Robot*> available;
   for (const robots::Robot& robot : robots) {
-    if (robot.status() == robots::RobotStatus::Idle) {
+    if (robot.isAvailable()) {
       available.push_back(&robot);
     }
   }

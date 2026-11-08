@@ -33,7 +33,8 @@ struct Task {
 };
 
 // Owns every task and enforces the lifecycle
-// Pending -> Assigned -> InProgress -> Completed, with Failed reachable from the middle two.
+// Pending -> Assigned -> InProgress -> Completed, with Failed reachable from the middle two and
+// Assigned -> Pending when a robot gives a task back before collecting it.
 // Invalid transitions throw std::logic_error; unknown ids throw std::out_of_range.
 class TaskBoard {
  public:
@@ -44,6 +45,8 @@ class TaskBoard {
   [[nodiscard]] std::size_t count(TaskStatus status) const noexcept;
 
   void assign(core::TaskId id, core::RobotId robot);
+  // Assigned -> Pending: the robot can no longer do it, so it goes back up for assignment.
+  void release(core::TaskId id);
   void markInProgress(core::TaskId id);
   void complete(core::TaskId id);
   void fail(core::TaskId id);
