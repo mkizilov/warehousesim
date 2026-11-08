@@ -206,4 +206,183 @@ TEST(OccupancyTest, RandomOperationsKeepBothIndexesConsistent) {
   }
 }
 
+// ---- cells claimed ahead of a robot ------------------------------------------------------
+
+TEST(OccupancyClaimTest, AClaimedCellBelongsToTheRobotAndKeepsEveryoneElseOut) {
+  Occupancy occupancy(GridSize(4, 2));
+  ASSERT_TRUE(occupancy.place(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(occupancy.place(R(2), P(3, 1)) == PlaceStatus::Ok);
+  EXPECT_TRUE(occupancy.claim(R(1), P(1, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(occupancy.claim(R(1), P(2, 0)) == MoveStatus::Ok);
+
+  EXPECT_EQ(occupancy.holdsOf(R(1)), (std::vector<Point>{P(0, 0), P(1, 0), P(2, 0)}));
+  EXPECT_EQ(occupancy.positionOf(R(1)), P(0, 0));  // the position is still the first cell
+  EXPECT_EQ(occupancy.occupantAt(P(2, 0)), R(1));
+  EXPECT_TRUE(occupancy.isOccupied(P(1, 0)));
+  EXPECT_EQ(occupancy.robotCount(), 2U);  // robots, not cells
+  EXPECT_EQ(occupancy.occupiedCells(),
+            (std::vector<Point>{P(0, 0), P(1, 0), P(2, 0), P(3, 1)}));  // by robot id, in order
+
+  EXPECT_TRUE(occupancy.claim(R(2), P(2, 0)) == MoveStatus::CellOccupied);
+  EXPECT_TRUE(occupancy.claim(R(2), P(1, 0)) == MoveStatus::CellOccupied);
+  EXPECT_TRUE(occupancy.claim(R(1), P(1, 0)) == MoveStatus::CellOccupied);  // not twice
+  EXPECT_TRUE(occupancy.claim(R(1), P(4, 0)) == MoveStatus::OutOfBounds);
+  EXPECT_TRUE(occupancy.claim(R(9), P(2, 1)) == MoveStatus::UnknownRobot);
+  EXPECT_TRUE(occupancy.place(R(3), P(1, 0)) == PlaceStatus::CellOccupied);
+  EXPECT_EQ(occupancy.holdsOf(R(2)), (std::vector<Point>{P(3, 1)}));  // refusals changed nothing
+  EXPECT_TRUE(occupancy.holdsOf(R(9)).empty());
+}
+
+TEST(OccupancyClaimTest, AdvancingPassesTheFirstClaimedCellAndFreesTheOneLeftBehind) {
+  Occupancy occupancy(GridSize(4, 1));
+  ASSERT_TRUE(occupancy.place(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(occupancy.claim(R(1), P(1, 0)) == MoveStatus::Ok);
+  ASSERT_TRUE(occupancy.claim(R(1), P(2, 0)) == MoveStatus::Ok);
+
+  EXPECT_TRUE(occupancy.advance(R(1)));
+  EXPECT_EQ(occupancy.positionOf(R(1)), P(1, 0));
+  EXPECT_EQ(occupancy.holdsOf(R(1)), (std::vector<Point>{P(1, 0), P(2, 0)}));
+  EXPECT_FALSE(occupancy.isOccupied(P(0, 0)));  // free for someone else now
+  EXPECT_TRUE(occupancy.place(R(2), P(0, 0)) == PlaceStatus::Ok);
+
+  EXPECT_TRUE(occupancy.advance(R(1)));
+  EXPECT_EQ(occupancy.holdsOf(R(1)), (std::vector<Point>{P(2, 0)}));
+  EXPECT_FALSE(occupancy.advance(R(1)));  // nothing claimed: it cannot pass a cell it does not hold
+  EXPECT_FALSE(occupancy.advance(R(7)));
+  EXPECT_EQ(occupancy.positionOf(R(1)), P(2, 0));
+}
+
+TEST(OccupancyClaimTest, ReleasingGivesBackTheNewestClaimsAndNeverThePosition) {
+  Occupancy occupancy(GridSize(5, 1));
+  ASSERT_TRUE(occupancy.place(R(1), P(0, 0)) == PlaceStatus::Ok);
+  for (int x = 1; x <= 3; ++x) {
+    ASSERT_TRUE(occupancy.claim(R(1), P(x, 0)) == MoveStatus::Ok);
+  }
+  EXPECT_EQ(occupancy.releaseClaims(R(1), 5), 0U);  // already within the limit
+  EXPECT_EQ(occupancy.releaseClaims(R(1), 1), 2U);
+  EXPECT_EQ(occupancy.holdsOf(R(1)), (std::vector<Point>{P(0, 0), P(1, 0)}));
+  EXPECT_FALSE(occupancy.isOccupied(P(3, 0)));
+  EXPECT_FALSE(occupancy.isOccupied(P(2, 0)));
+  EXPECT_EQ(occupancy.releaseClaims(R(1), 0), 1U);
+  EXPECT_EQ(occupancy.holdsOf(R(1)), (std::vector<Point>{P(0, 0)}));
+  EXPECT_EQ(occupancy.releaseClaims(R(1), 0), 0U);  // the position stays
+  EXPECT_EQ(occupancy.releaseClaims(R(9), 0), 0U);
+  EXPECT_TRUE(occupancy.isOccupied(P(0, 0)));
+}
+
+TEST(OccupancyClaimTest, ARobotThatHoldsClaimedCellsCannotBeTeleported) {
+  Occupancy occupancy(GridSize(4, 1));
+  ASSERT_TRUE(occupancy.place(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(occupancy.claim(R(1), P(1, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(occupancy.move(R(1), P(3, 0)) == MoveStatus::HasClaims);
+  EXPECT_EQ(occupancy.holdsOf(R(1)), (std::vector<Point>{P(0, 0), P(1, 0)}));
+  EXPECT_FALSE(occupancy.isOccupied(P(3, 0)));
+  EXPECT_EQ(occupancy.releaseClaims(R(1), 0), 1U);
+  EXPECT_TRUE(occupancy.move(R(1), P(3, 0)) == MoveStatus::Ok);
+}
+
+TEST(OccupancyClaimTest, RemovingARobotFreesEverythingItHeld) {
+  Occupancy occupancy(GridSize(4, 1));
+  ASSERT_TRUE(occupancy.place(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(occupancy.claim(R(1), P(1, 0)) == MoveStatus::Ok);
+  ASSERT_TRUE(occupancy.claim(R(1), P(2, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(occupancy.remove(R(1)));
+  for (int x = 0; x < 4; ++x) {
+    EXPECT_FALSE(occupancy.isOccupied(P(x, 0)));
+  }
+  EXPECT_TRUE(occupancy.occupiedCells().empty());
+  EXPECT_EQ(occupancy.robotCount(), 0U);
+}
+
+// The two indexes (cell -> robot and robot -> held cells) never disagree, whatever happens.
+TEST(OccupancyClaimTest, RandomOperationsKeepBothIndexesInStep) {
+  Rng rng(99);
+  const GridSize size(5, 4);
+  Occupancy occupancy(size);
+  std::map<RobotId, std::vector<Point>> model;  // robot -> position then claims
+  const auto heldByAnyone = [&](Point p) {
+    for (const auto& [id, cells] : model) {
+      for (const Point cell : cells) {
+        if (cell == p) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  int claims = 0;
+  int advances = 0;
+  for (int step = 0; step < 4000; ++step) {
+    const RobotId robot = R(static_cast<std::uint32_t>(1 + rng.below(4)));
+    const Point cell = P(static_cast<int>(rng.below(6)) - 1, static_cast<int>(rng.below(5)) - 1);
+    switch (rng.below(6)) {
+      case 0: {
+        const bool fits = size.contains(cell) && !heldByAnyone(cell) && !model.contains(robot);
+        EXPECT_EQ(occupancy.place(robot, cell) == PlaceStatus::Ok, fits);
+        if (fits) {
+          model[robot] = {cell};
+        }
+        break;
+      }
+      case 1:
+      case 2: {
+        const bool fits = model.contains(robot) && size.contains(cell) && !heldByAnyone(cell);
+        EXPECT_EQ(occupancy.claim(robot, cell) == MoveStatus::Ok, fits);
+        if (fits) {
+          model[robot].push_back(cell);
+          ++claims;
+        }
+        break;
+      }
+      case 3: {
+        const bool can = model.contains(robot) && model[robot].size() > 1;
+        EXPECT_EQ(occupancy.advance(robot), can);
+        if (can) {
+          model[robot].erase(model[robot].begin());
+          ++advances;
+        }
+        break;
+      }
+      case 4: {
+        const std::size_t keep = rng.below(3);
+        if (model.contains(robot)) {
+          auto& cells = model[robot];
+          const std::size_t before = cells.size();
+          if (cells.size() > 1 + keep) {
+            cells.resize(1 + keep);
+          }
+          EXPECT_EQ(occupancy.releaseClaims(robot, keep), before - cells.size());
+        } else {
+          EXPECT_EQ(occupancy.releaseClaims(robot, keep), 0U);
+        }
+        break;
+      }
+      default: {
+        EXPECT_EQ(occupancy.remove(robot), model.contains(robot));
+        model.erase(robot);
+        break;
+      }
+    }
+
+    std::size_t totalHeld = 0;
+    for (const auto& [id, cells] : model) {
+      ASSERT_EQ(occupancy.holdsOf(id), cells);
+      ASSERT_EQ(occupancy.positionOf(id), cells.front());
+      for (const Point held : cells) {
+        ASSERT_EQ(occupancy.occupantAt(held), id);
+      }
+      totalHeld += cells.size();
+    }
+    ASSERT_EQ(occupancy.robotCount(), model.size());
+    ASSERT_EQ(occupancy.occupiedCells().size(), totalHeld);
+    std::size_t occupiedCells = 0;
+    for (std::size_t i = 0; i < size.cellCount(); ++i) {
+      occupiedCells += occupancy.isOccupied(size.pointAt(i)) ? 1U : 0U;
+    }
+    ASSERT_EQ(occupiedCells, totalHeld);  // one holder per cell, nothing left behind
+  }
+  EXPECT_GT(claims, 200);
+  EXPECT_GT(advances, 100);
+}
+
 }  // namespace

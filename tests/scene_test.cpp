@@ -24,9 +24,11 @@
 
 namespace {
 
+using warehousesim::core::Direction;
 using warehousesim::core::Point;
 using warehousesim::robots::NavigationGoal;
 using warehousesim::robots::RobotState;
+using warehousesim::simulation::RobotPose;
 using warehousesim::simulation::RobotSnapshot;
 using warehousesim::simulation::Snapshot;
 using warehousesim::tasks::Task;
@@ -612,15 +614,130 @@ TEST(SceneTest, ExtremeZoomsProduceOnlyFiniteCoordinates) {
   }
 }
 
-TEST(SceneTest, LiveSimulationSnapshotShowsEveryRobot) {
-  auto simulation = warehousesim::simulation::makeDemoSimulation(1);
-  simulation.run(60);
-  const Snapshot snapshot = simulation.snapshot();
-  const Camera camera(ScreenSize{960, 600}, simulation.warehouse().size());
-  const DrawList list = sceneOf(simulation.warehouse(), snapshot, camera);
-  for (const RobotSnapshot& robot : snapshot.robots) {
-    EXPECT_TRUE(indexOfFill(list, inset(camera.cellRect(robot.position), 0.15)).has_value());
+// ---- robots at a continuous pose, carrying cargo, part-way through a turn -----------------------
+
+bool hasFillNear(const DrawList& list, const ScreenRect& rect) {
+  for (const FillRect& f : fills(list)) {
+    if (std::fabs(f.rect.x - rect.x) < 1e-9 && std::fabs(f.rect.y - rect.y) < 1e-9 &&
+        std::fabs(f.rect.width - rect.width) < 1e-9 &&
+        std::fabs(f.rect.height - rect.height) < 1e-9) {
+      return true;
+    }
   }
+  return false;
+}
+
+TEST(SceneTest, ARobotCarryingCargoShowsABoxOnItsBodyAndAnEmptyOneDoesNot) {
+  const Camera camera = smallCamera(40.0);
+  const ScreenRect body = inset(camera.cellRect(P(1, 0)), 0.15);
+  Snapshot loaded = snapshotWithRobot(P(1, 0), kToDropoff);
+  loaded.robots[0].carrying = true;
+  EXPECT_TRUE(indexOfFill(sceneOf(smallWarehouse(), loaded, camera), inset(body, 0.3)).has_value());
+  const Snapshot empty = snapshotWithRobot(P(1, 0), kToPickup);
+  EXPECT_FALSE(indexOfFill(sceneOf(smallWarehouse(), empty, camera), inset(body, 0.3)).has_value());
+}
+
+TEST(SceneTest, ARobotBetweenTwoCellsIsDrawnBetweenThemWhileItsLogicalCellStaysPut) {
+  const Camera camera = smallCamera(40.0);
+  const ScreenRect resting = inset(camera.cellRect(P(0, 0)), 0.15);
+  Snapshot snapshot = snapshotWithRobot(P(0, 0), kToPickup);
+  // Half way from the middle of cell (0, 0) to the middle of cell (1, 0).
+  snapshot.robots[0].pose = RobotPose{{1.0, 0.5}, 0.0};
+  const DrawList list = sceneOf(smallWarehouse(), snapshot, camera);
+  ScreenRect shifted = resting;
+  shifted.x += 0.5 * camera.zoom();
+  EXPECT_TRUE(indexOfFill(list, shifted).has_value());
+  EXPECT_FALSE(indexOfFill(list, resting).has_value());
+}
+
+TEST(SceneTest, ARobotWithNoPoseOrAPoseAtItsCellCentreIsDrawnExactlyInTheCell) {
+  const Camera camera = smallCamera(40.0);
+  const ScreenRect expected = inset(camera.cellRect(P(2, 1)), 0.15);
+  Snapshot plain = snapshotWithRobot(P(2, 1), kIdle);
+  EXPECT_TRUE(indexOfFill(sceneOf(smallWarehouse(), plain, camera), expected).has_value());
+  Snapshot posed = snapshotWithRobot(P(2, 1), kIdle);
+  posed.robots[0].pose = RobotPose{{2.5, 1.5}, warehousesim::core::angleOf(Direction::North)};
+  EXPECT_TRUE(indexOfFill(sceneOf(smallWarehouse(), posed, camera), expected).has_value());
+}
+
+TEST(SceneTest, TheHeadingMarkerFollowsTheContinuousHeadingNotTheCardinalOne) {
+  const Camera camera = smallCamera(40.0);
+  const ScreenRect body = inset(camera.cellRect(P(1, 0)), 0.15);
+  const double nub = body.width * 0.25;
+
+  // At a cardinal angle the marker is exactly where the discrete heading would put it, whatever
+  // the (stale) discrete heading says.
+  Snapshot east = snapshotWithRobot(P(1, 0), kIdle);
+  east.robots[0].heading = Direction::North;
+  east.robots[0].pose = RobotPose{{1.5, 0.5}, warehousesim::core::angleOf(Direction::East)};
+  EXPECT_TRUE(
+      indexOfFill(sceneOf(smallWarehouse(), east, camera),
+                  ScreenRect{body.right() - nub, body.y + (body.height - nub) / 2.0, nub, nub})
+          .has_value());
+
+  // Half way through a turn from north to east the marker sits on the corner between them.
+  Snapshot turning = snapshotWithRobot(P(1, 0), kIdle);
+  const double angle = -warehousesim::core::kPi / 4.0;
+  turning.robots[0].pose = RobotPose{{1.5, 0.5}, angle};
+  const DrawList list = sceneOf(smallWarehouse(), turning, camera);
+  const double reach = (body.width - nub) / 2.0;
+  const ScreenRect corner{body.x + reach + std::cos(angle) * reach,
+                          body.y + reach + std::sin(angle) * reach, nub, nub};
+  EXPECT_TRUE(hasFillNear(list, corner));
+  EXPECT_LT(corner.x + nub / 2.0 - (body.x + body.width / 2.0), reach + 1e-9);
+  EXPECT_GT(corner.x, body.x + reach);  // to the east of centre...
+  EXPECT_LT(corner.y, body.y + reach);  // ...and to the north of it
+}
+
+TEST(SceneTest, ARobotIsOnScreenIfEitherItsCellOrTheCellUnderItsCentreIs) {
+  Camera camera(ScreenSize{300, 200}, warehousesim::world::GridSize(3, 2));
+  camera.setZoom(100.0);
+  camera.centerOn({2.5, 1.0});  // columns 1 and 2 are on screen, column 0 is not
+  const auto robotColour = warehousesim::view::robotColor(kToPickup.state, kToPickup.goal);
+  const auto robotFills = [&](const DrawList& list) {
+    int count = 0;
+    for (const FillRect& f : fills(list)) {
+      count += f.color == robotColour ? 1 : 0;
+    }
+    return count;
+  };
+
+  Snapshot offscreen = snapshotWithRobot(P(0, 0), kToPickup);  // resting off screen: not drawn
+  EXPECT_EQ(robotFills(sceneOf(smallWarehouse(), offscreen, camera)), 0);
+
+  Snapshot driving = snapshotWithRobot(P(0, 0), kToPickup);  // still in cell 0, but its centre has
+  driving.robots[0].pose = RobotPose{{1.2, 0.5}, 0.0};       // crossed into cell 1, on screen
+  EXPECT_EQ(robotFills(sceneOf(smallWarehouse(), driving, camera)), 1);
+}
+
+// Robots are drawn at their continuous pose, which is between two cells while they drive.
+TEST(SceneTest, LiveSimulationSnapshotShowsEveryRobotAtItsPose) {
+  auto simulation = warehousesim::simulation::makeDemoSimulation(1);
+  const Camera camera(ScreenSize{960, 600}, simulation.warehouse().size());
+  const auto near = [](double a, double b) { return std::fabs(a - b) < 1e-6; };
+  int robotsBetweenCells = 0;
+  for (int tick = 0; tick < 80; ++tick) {
+    simulation.step();
+    const Snapshot snapshot = simulation.snapshot();
+    const DrawList list = sceneOf(simulation.warehouse(), snapshot, camera);
+    for (const RobotSnapshot& robot : snapshot.robots) {
+      ASSERT_TRUE(robot.pose.has_value());
+      const warehousesim::view::ScreenPoint centre =
+          camera.worldToScreen({robot.pose->center.x, robot.pose->center.y});
+      const double side = camera.zoom() * 0.7;
+      bool drawn = false;
+      for (const FillRect& f : fills(list)) {
+        drawn =
+            drawn || (f.color == warehousesim::view::robotColor(robot.state, robot.goal) &&
+                      near(f.rect.x + f.rect.width / 2.0, centre.x) &&
+                      near(f.rect.y + f.rect.height / 2.0, centre.y) && near(f.rect.width, side));
+      }
+      EXPECT_TRUE(drawn) << "robot " << robot.id.value << " at tick " << snapshot.tick;
+      robotsBetweenCells +=
+          robot.center().x != robot.position.x + 0.5 || robot.center().y != robot.position.y + 0.5;
+    }
+  }
+  EXPECT_GT(robotsBetweenCells, 20);  // the run really did catch robots in mid-move
 }
 
 }  // namespace

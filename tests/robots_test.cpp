@@ -68,12 +68,19 @@ void expectConsistent(const Robot& robot) {
   EXPECT_EQ(robot.inconsistency().value_or("consistent"), "consistent");
 }
 
-// Walks the robot along its whole path, one cell per tick (it must be a speed-1 robot).
+// One tick of motion: grants the robot the cells it wants (the part the simulation plays, since
+// a robot never looks at the world) and drives it. Returns how many cells it passed.
+std::uint32_t step(Robot& robot, double dt = 1.0) {
+  while (robot.authority() < robot.wantedAuthority(dt)) {
+    robot.extendAuthority();
+  }
+  return robot.drive(dt);
+}
+
+// Walks the robot along its whole path.
 void driveToDestination(Robot& robot) {
   while (robot.hasPath()) {
-    if (robot.travel()) {
-      robot.commitStep();
-    }
+    (void)step(robot);
   }
 }
 
@@ -321,15 +328,13 @@ TEST(RobotLifecycleTest, FullTaskCycleWalksTheStateMachine) {
   EXPECT_THROW(robot.beginLoading(), InvalidTransition);  // not there yet
   expectConsistent(robot);
 
-  EXPECT_TRUE(robot.travel());
+  EXPECT_EQ(step(robot), 1U);
   EXPECT_EQ(robot.heading(), Direction::East);
-  EXPECT_DOUBLE_EQ(robot.speed(), 1.0);
+  EXPECT_DOUBLE_EQ(robot.speed(), 1.0);  // still driving: one more cell to go
   EXPECT_EQ(robot.velocity(), (Velocity{1.0, 0.0}));
-  robot.commitStep();
   EXPECT_EQ(robot.position(), P(1, 0));
   EXPECT_EQ(robot.battery().level(), 990U);
-  EXPECT_TRUE(robot.travel());
-  robot.commitStep();
+  EXPECT_EQ(step(robot), 1U);
   EXPECT_EQ(robot.position(), P(2, 0));
   EXPECT_EQ(robot.battery().level(), 980U);
   EXPECT_TRUE(robot.hasArrived());
@@ -628,11 +633,12 @@ TEST(RobotTransitionTest, RedirectChargerTripOnlyAppliesToChargerTrips) {
 
 TEST(RobotTransitionTest, MovementPrimitivesRequireAPath) {
   Robot idle(R(1), P(0, 0), energySpec());
-  EXPECT_THROW((void)idle.travel(), InvalidTransition);
-  EXPECT_THROW(idle.commitStep(), InvalidTransition);
+  EXPECT_THROW((void)idle.drive(), InvalidTransition);
+  EXPECT_THROW(idle.extendAuthority(), InvalidTransition);
   Robot arrived(R(2), P(0, 0), energySpec());
   arrived.beginTask(T(1), P(0, 0), {});
-  EXPECT_THROW((void)arrived.travel(), InvalidTransition);  // nowhere left to go
+  EXPECT_THROW((void)arrived.drive(), InvalidTransition);  // nowhere left to go
+  EXPECT_THROW(arrived.extendAuthority(), InvalidTransition);
 }
 
 // ---- battery --------------------------------------------------------------------------
@@ -699,8 +705,7 @@ TEST(RobotBatteryTest, WaitingWhileNavigatingCostsNothing) {
   robot.beginTask(T(1), P(2, 0), eastward(P(0, 0), 2));
   for (int i = 0; i < 20; ++i) {
     robot.elapseTick();
-    EXPECT_TRUE(robot.travel());
-    robot.halt();  // blocked every tick
+    EXPECT_EQ(robot.drive(), 0U);  // never granted its first cell: blocked every tick
   }
   EXPECT_EQ(robot.battery().level(), 1000U);
 }
@@ -790,8 +795,7 @@ TEST(RobotMotionTest, FullSpeedEntersACellEveryTick) {
   Robot robot(R(1), P(0, 0), energySpec());
   robot.beginTask(T(1), P(4, 0), eastward(P(0, 0), 4));
   for (int cell = 1; cell <= 4; ++cell) {
-    EXPECT_TRUE(robot.travel());
-    robot.commitStep();
+    EXPECT_EQ(step(robot), 1U);
     EXPECT_EQ(robot.position(), P(cell, 0));
   }
 }
@@ -803,12 +807,8 @@ TEST(RobotMotionTest, HalfSpeedEntersACellEverySecondTick) {
   robot.beginTask(T(1), P(3, 0), eastward(P(0, 0), 3));
   std::vector<bool> entered;
   for (int tick = 0; tick < 6; ++tick) {
-    const bool ready = robot.travel();
-    entered.push_back(ready);
-    EXPECT_DOUBLE_EQ(robot.speed(), 0.5);
-    if (ready) {
-      robot.commitStep();
-    }
+    entered.push_back(step(robot) > 0);
+    EXPECT_DOUBLE_EQ(robot.speed(), robot.hasPath() ? 0.5 : 0.0);  // stops on the last arrival
   }
   EXPECT_EQ(entered, (std::vector<bool>{false, true, false, true, false, true}));
   EXPECT_EQ(robot.position(), P(3, 0));
@@ -819,14 +819,11 @@ TEST(RobotMotionTest, FractionalSpeedsKeepTheirRemainderAcrossCells) {
   spec.maxSpeed = 0.75;
   Robot robot(R(1), P(0, 0), spec);
   robot.beginTask(T(1), P(30, 0), eastward(P(0, 0), 30));
-  int cells = 0;
+  std::uint32_t cells = 0;
   for (int tick = 0; tick < 40; ++tick) {
-    if (robot.travel()) {
-      robot.commitStep();
-      ++cells;
-    }
+    cells += step(robot);
   }
-  EXPECT_EQ(cells, 30);  // 40 ticks x 0.75 = 30 cells exactly, with no drift
+  EXPECT_EQ(cells, 30U);  // 40 ticks x 0.75 = 30 cells exactly, with no drift
 }
 
 TEST(RobotMotionTest, ThirdSpeedSumsToAWholeCellDespiteRounding) {
@@ -837,9 +834,7 @@ TEST(RobotMotionTest, ThirdSpeedSumsToAWholeCellDespiteRounding) {
   int ticks = 0;
   while (robot.hasPath()) {
     ++ticks;
-    if (robot.travel()) {
-      robot.commitStep();
-    }
+    (void)step(robot);
   }
   EXPECT_EQ(ticks, 6);
 }
@@ -862,7 +857,7 @@ TEST(RobotMotionTest, VelocityPointsTheWayTheRobotIsFacingScaledBySpeed) {
     Robot robot(R(1), P(2, 2), spec);
     robot.beginTask(T(1), c.path.back(), c.path);
     EXPECT_EQ(robot.velocity(), (Velocity{0.0, 0.0}));  // not moving yet
-    (void)robot.travel();
+    EXPECT_EQ(step(robot), 0U);                         // half a cell on the way
     EXPECT_EQ(robot.heading(), c.heading);
     EXPECT_EQ(robot.velocity(), c.expected);
   }
@@ -870,41 +865,47 @@ TEST(RobotMotionTest, VelocityPointsTheWayTheRobotIsFacingScaledBySpeed) {
 
 TEST(RobotMotionTest, VelocityDropsToZeroWhenBlockedAndOnArrival) {
   Robot robot(R(1), P(0, 0), energySpec());
-  robot.beginTask(T(1), P(2, 0), eastward(P(0, 0), 2));
-  EXPECT_TRUE(robot.travel());
-  robot.halt();
+  robot.beginTask(T(1), P(3, 0), eastward(P(0, 0), 3));
+  EXPECT_EQ(step(robot), 1U);
+  EXPECT_DOUBLE_EQ(robot.speed(), 1.0);
+  EXPECT_EQ(robot.drive(), 0U);  // the next cell is not granted: the robot waits
   EXPECT_DOUBLE_EQ(robot.speed(), 0.0);
   EXPECT_EQ(robot.velocity(), (Velocity{0.0, 0.0}));
-  EXPECT_TRUE(robot.travel());  // retries next tick
-  robot.commitStep();
-  EXPECT_TRUE(robot.travel());
-  robot.commitStep();
+  EXPECT_EQ(step(robot), 1U);  // granted again next tick
+  EXPECT_DOUBLE_EQ(robot.speed(), 1.0);
+  EXPECT_EQ(step(robot), 1U);
   EXPECT_EQ(robot.velocity(), (Velocity{0.0, 0.0}));  // arrived
 }
 
+// A robot only drives into cells it has been granted, so waiting for a cell covers no distance
+// and a long wait does not buy a head start once the cell is free.
 TEST(RobotMotionTest, ABlockedRobotDoesNotBankTravelItCouldNotUse) {
   RobotSpec spec = energySpec();
   spec.maxSpeed = 0.5;
   Robot robot(R(1), P(0, 0), spec);
   robot.beginTask(T(1), P(2, 0), eastward(P(0, 0), 2));
   for (int i = 0; i < 50; ++i) {
-    (void)robot.travel();
-    robot.halt();
+    EXPECT_EQ(robot.drive(), 0U);
   }
-  EXPECT_TRUE(robot.travel());  // the first cell was already covered while it waited
-  robot.commitStep();
+  EXPECT_DOUBLE_EQ(robot.segmentProgress(), 0.0);
+  EXPECT_EQ(robot.position(), P(0, 0));
+  EXPECT_EQ(step(robot), 0U);  // half speed: the first cell takes two ticks from a standing start
+  EXPECT_EQ(step(robot), 1U);
   EXPECT_EQ(robot.position(), P(1, 0));
-  EXPECT_FALSE(robot.travel());  // 50 ticks of waiting did not buy a head start on the next cell
 }
 
-TEST(RobotMotionTest, CommitStepNeedsAWholeCellOfTravel) {
+TEST(RobotMotionTest, ACellIsOnlyEnteredOnceItHasBeenCoveredInFull) {
   RobotSpec spec = energySpec();
   spec.maxSpeed = 0.5;
   Robot robot(R(1), P(0, 0), spec);
   robot.beginTask(T(1), P(1, 0), eastward(P(0, 0), 1));
-  EXPECT_FALSE(robot.travel());
-  EXPECT_THROW(robot.commitStep(), InvalidTransition);
-  EXPECT_EQ(robot.position(), P(0, 0));
+  EXPECT_EQ(step(robot), 0U);
+  EXPECT_EQ(robot.position(), P(0, 0));  // half way there is still the old cell
+  EXPECT_DOUBLE_EQ(robot.segmentProgress(), 0.5);
+  EXPECT_EQ(robot.battery().level(), 1000U);  // energy is charged for cells entered
+  EXPECT_EQ(step(robot), 1U);
+  EXPECT_EQ(robot.position(), P(1, 0));
+  EXPECT_EQ(robot.battery().level(), 990U);
 }
 
 TEST(RobotMotionTest, BlockedTickCounterResetsWhenTheRobotMovesOrReroutes) {
@@ -913,8 +914,7 @@ TEST(RobotMotionTest, BlockedTickCounterResetsWhenTheRobotMovesOrReroutes) {
   robot.noteBlocked();
   robot.noteBlocked();
   EXPECT_EQ(robot.blockedTicks(), 2U);
-  EXPECT_TRUE(robot.travel());
-  robot.commitStep();
+  EXPECT_EQ(step(robot), 1U);
   EXPECT_EQ(robot.blockedTicks(), 0U);
   robot.noteBlocked();
   robot.setPath(RobotPath{P(1, 1), P(2, 1), P(3, 1), P(3, 0)});
@@ -1076,12 +1076,10 @@ TEST(RobotConsistencyTest, RandomOperationSequencesNeverBreakTheInvariants) {
                 P(robot.position().x + static_cast<int>(rng.below(3)) - 1, robot.position().y));
             break;
           case 15:
-            robot.halt();
+            robot.extendAuthority();
             break;
           case 16:
-            if (robot.travel() && rng.below(4) != 0) {
-              robot.commitStep();
-            }
+            (void)robot.drive();
             break;
           default:
             robot.elapseTick();

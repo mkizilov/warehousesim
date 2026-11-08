@@ -212,17 +212,22 @@ planner, task list or renderer). Each robot has:
 | Property | Where |
 |----------|-------|
 | stable id (never changes, 0 is invalid) | `id()` |
-| position and orientation (`Direction` it faces) | `position()`, `heading()` |
-| maximum speed, current speed and velocity (cells per tick; a robot enters at most one cell per tick, so `maxSpeed` is in (0, 1] and 0.5 means one cell every second tick) | `maxSpeed()`, `speed()`, `velocity()` |
+| logical cell (the last cell it passed) and the `Direction` it faces | `position()`, `heading()` |
+| continuous position and heading, which are between cells while it drives | `pose()`, `headingAngle()`, `segmentProgress()` |
+| maximum speed, current speed and velocity (cells per tick; a robot enters at most one cell per tick, so `maxSpeed` is in (0, 1]) | `maxSpeed()`, `speed()`, `velocity()` |
+| what its last step of motion was (stopped, turning, accelerating, cruising, braking) | `motion()` |
+| the cells it has been granted and may drive into | `authority()` |
+| cargo aboard, and cargo delivered | `carriesCargo()`, `deliveries()` |
 | battery (integer units, saturating, so exact on every platform) | `battery()`, `needsCharge()` |
 | assigned task, destination, planned path | `task()`, `destination()`, `path()` |
 | operational state | `state()`, `goal()` |
 
-`RobotSpec` holds the per-model constants: speed, battery capacity and start charge, the energy used per
-idle tick, per cell entered and per loading/unloading tick, the charge rate, a low-battery reserve, and
-the number of ticks spent loading and unloading. **The default spec is an idealised robot** (one cell per
-tick, instant handling, no energy use); with it the simulation reproduces the pre-state-machine behaviour
-tick for tick (checked against the previous commit on all three layouts and three seeds).
+`RobotSpec` holds the per-model constants: speed, acceleration, deceleration and turn rate, battery
+capacity and start charge, the energy used per idle tick, per cell entered and per loading/unloading tick,
+the charge rate, a low-battery reserve, and the number of ticks spent loading and unloading. **The default
+spec is an idealised robot** (one cell per tick, speeds and turns that happen instantly, instant handling,
+no energy use); with it the simulation reproduces the pre-state-machine behaviour tick for tick (see
+Movement, below, for how that was checked).
 
 State machine (`robots::isValidTransition`; a state never transitions to itself):
 
@@ -244,8 +249,52 @@ allowed from the current state, or whose preconditions fail (not arrived yet, em
 finished), throws `InvalidTransition` and leaves the robot unchanged; malformed arguments (a path that
 does not end at the destination, non-adjacent steps) throw `std::invalid_argument`.
 `Robot::inconsistency()` checks the invariants (goal and destination exist exactly while navigating, a task
-is held exactly while heading to a pickup/dropoff or handling cargo, a path exists only while navigating,
-speed and dwell are zero when they do not apply, the battery is within bounds).
+is held exactly while heading to a pickup/dropoff or handling cargo, a path exists only while navigating or
+while a withdrawn robot is still braking to a stop, speed, progress, authority and dwell are zero when they
+do not apply, the battery is within bounds).
+
+### Movement
+
+Motion is fixed-step (one tick is one step; distances are in cells, times in ticks) and keeps two things
+apart on purpose. The **logical** position is a grid cell: `position()` is the last cell the robot passed,
+and it is all that occupancy, planning and tasks ever see. The **continuous** position is `pose()`, the
+robot's centre in world space (cell `(x, y)` is centred on `(x + 0.5, y + 0.5)`), which is between two cells
+while it drives. Only the picture uses the pose.
+
+- **Limits.** `RobotSpec::maxSpeed`, `acceleration` and `deceleration` (cells per tick squared) and
+  `turnRate` (radians per tick). Unset means instant, which is the idealised default. A deceleration must
+  stop the robot from top speed within one cell (`validate()` checks it).
+- **Profile.** Along a straight run to a stop point the robot speeds up, cruises and brakes so as to come to
+  rest exactly at the stop point (`robots::advanceAlongRun`). The profile is closed-form, so the robot
+  follows the same trajectory however a stretch of time is divided into steps (`MotionPropertyTest`
+  integrates the same run in steps from 1.0 down to 0.05 and compares).
+- **Stops.** A robot stops at its destination, at the end of the cells it has been granted, and, if it has a
+  finite `turnRate`, at every corner. It turns on the spot, the short way round (a U-turn goes clockwise),
+  and the time the turn takes comes out of the step; a robot that is moving never turns. A robot with
+  instant turns drives straight through corners.
+- **Authority.** A robot may only drive into cells it holds. `Occupancy` therefore holds, for each robot,
+  its cell plus the cells it has claimed ahead, still at most one robot per cell; `Robot::wantedAuthority()`
+  asks for just enough to cover the distance it can drive in the step plus the distance it needs to stop
+  (at most three cells), and `Simulation` claims them in the world. This is what guarantees that a robot
+  never enters a cell another robot holds, that it can always stop in time, and that two robots' centres are
+  never closer than one cell (all audited on every tick, on every layout, by `MovementTest`). It is not
+  cooperative planning: nothing is negotiated, a robot that cannot get its next cell simply waits for it.
+- **Withdrawn mid-move.** Cancelling a task, disabling a robot or running out of battery between two cells
+  does not stop the robot dead. It changes state at once (`Idle` or `Unavailable`) but keeps the cells it
+  needs and brakes to the first waypoint it can stop at without exceeding its deceleration, only ever
+  slowing down on the way; it is not available for work until it has stopped.
+- **Cargo.** `carriesCargo()` is true from the end of loading to the end of unloading, `deliveries()` counts
+  hand-overs at dropoffs. Dropped cargo (a withdrawn job) is not a delivery.
+- **Energy.** `moveCostPerCell` is charged for each cell entered, so a journey costs the same whatever
+  speed profile covered it; idle and handling drains are per tick.
+
+**Compared with the previous commit.** With the default spec the new engine is byte-for-byte the same on
+all three layouts and three seeds (4 robots, 1500 ticks each: positions, states, headings, batteries,
+speeds and task counts). A single robot with a fractional `maxSpeed` also matches, except that it turns to
+its next direction as soon as it has driven into the next segment (rather than a tick later, when its pose
+would already disagree), and that one whose battery dies mid-cell coasts to a stop instead of freezing
+there. Several slow robots (`maxSpeed < 1`) differ when they contest a cell, because a cell is now claimed
+before a robot drives into it rather than checked when it arrives.
 
 `Simulation` is the only place that drives robots. Each tick a robot, in id order: finishes whatever its
 state allows (arrive, finish loading/unloading/charging, start a charging trip if idle and low), is taken
@@ -264,20 +313,26 @@ charging) and advances along its path. Rules worth knowing:
   loading and unloading everywhere, and an energy model (and recharging) on the layouts that have chargers.
 
 Robots are shown by the visualisation but contain no drawing code: the view reads
-`simulation::RobotSnapshot` (state, goal, heading, speed, battery, task).
+`simulation::RobotSnapshot` (state, goal, heading, pose, speed, motion, battery, task, cargo).
 
 ## Visualisation
 
 The window shows the grid with walls, shelves, pickup `P`, dropoff `D` and charging `C` cells (letters
 appear when zoomed in), task markers, robot placeholders (a coloured square per robot by state: blue idle, orange
 heading to a pickup, red heading to a dropoff, lime heading to a charger, amber loading, magenta unloading,
-green charging, grey unavailable; a nub on the edge it faces, and the id and a battery gauge when zoomed in), column/row indices along the top and left edges,
+green charging, grey unavailable; a nub on the side it faces, a box on top while it carries cargo, and the id and a battery gauge when zoomed in), column/row indices along the top and left edges,
 and a status bar with the tick, playback speed, zoom, task counts and the cell under the pointer.
 
 - **Fixed timestep.** The simulation runs on a worker thread; `core::FixedTimestep` turns elapsed real time
   into whole simulation steps of constant size, so frame rate, window resizing and a slow renderer never
   change what is simulated. Playback speed only scales how many steps happen per real second, and time
   spent paused is not replayed afterwards. A stall longer than 200 steps' worth is dropped, not replayed.
+- **Smooth motion at any frame rate.** The simulation only ever advances in whole steps. For each frame
+  `SimulationRunner::frame()` returns the last two states and how far into the next step real time has got
+  (`alpha`), and `view::blend()` interpolates the robots' poses and headings between them. What is drawn is
+  therefore a function of real time alone, whatever the frame rate (`FrameRateTest` replays the same run at
+  10 to 240 fps and compares), at the price of showing the simulation up to one step behind. Pausing
+  freezes the picture where it is and resuming carries on from there.
 - **Camera.** `view::Camera` maps world space (cells, y down) to screen pixels (`screen = (world - centre) *
   zoom + window centre`), zooms about the pointer, pans in pixels, keeps its centre inside the warehouse,
   and re-fits the whole grid on resize until the user pans or zooms.
@@ -296,6 +351,10 @@ the status bar.
 - Scenarios have up to four robots (the demo layout starts them on row 0; other layouts on charging
   stations) and spawn a random task every 5 ticks, with a random priority: from a `Pickup` cell if the
   layout has any, otherwise from an aisle cell beside a shelf, to a random `Dropoff`.
+- The bundled robots drive like vehicles: top speed 1 cell per tick, acceleration 0.5, deceleration 1 and a
+  quarter turn per tick, stopping at every corner. That costs throughput against the idealised robot: in
+  3000 ticks they complete 179 to 205 tasks on `demo`, 92 to 98 on `compact` and 145 to 154 on `fulfilment`
+  (seeds 1 to 3), against 315 to 343, 159 to 160 and 227 to 239 with idealised robots.
 - Robots act in id order each tick (see Robots above). A robot blocked for 3 ticks makes an idle or lower-priority (higher id)
   blocker step aside, or routes around a higher-priority one. Dropoffs are single cells reachable from
   one side in the demo layout, so heavy demand queues up; nothing deadlocks (see `DemoScenarioNeverDeadlocks`).

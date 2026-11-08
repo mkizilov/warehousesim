@@ -40,7 +40,38 @@ MoveStatus World::checkMove(RobotId robot, Point to) const {
   if (occupancy_.isOccupied(to)) {
     return MoveStatus::CellOccupied;
   }
+  if (occupancy_.holdsOf(robot).size() > 1) {
+    return MoveStatus::HasClaims;
+  }
   return MoveStatus::Ok;
+}
+
+MoveStatus World::checkClaim(RobotId robot, Point cell) const {
+  const std::vector<Point> held = occupancy_.holdsOf(robot);
+  if (held.empty()) {
+    return MoveStatus::UnknownRobot;
+  }
+  if (!layout_.inBounds(cell)) {
+    return MoveStatus::OutOfBounds;
+  }
+  if (!core::directionBetween(held.back(), cell)) {
+    return MoveStatus::NotAdjacent;
+  }
+  if (layout_.isObstacle(cell)) {
+    return MoveStatus::BlockedByObstacle;
+  }
+  if (occupancy_.isOccupied(cell)) {
+    return MoveStatus::CellOccupied;
+  }
+  return MoveStatus::Ok;
+}
+
+MoveStatus World::claimCell(RobotId robot, Point cell) {
+  const MoveStatus status = checkClaim(robot, cell);
+  if (status != MoveStatus::Ok) {
+    return status;
+  }
+  return occupancy_.claim(robot, cell);
 }
 
 MoveStatus World::moveRobot(RobotId robot, Point to) {

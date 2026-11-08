@@ -47,6 +47,17 @@ std::uint32_t FixedTimestep::advance(double elapsedRealSeconds) {
   return steps;
 }
 
+void FixedTimestep::reset(double alpha) noexcept {
+  accumulatedSeconds_ = std::isfinite(alpha) ? std::clamp(alpha, 0.0, 1.0) * stepSeconds_ : 0.0;
+}
+
+double FixedTimestep::alphaAfter(double realSeconds) const {
+  if (!std::isfinite(realSeconds) || realSeconds < 0.0) {
+    throw std::invalid_argument("elapsed time must be finite and non-negative");
+  }
+  return std::clamp((accumulatedSeconds_ + realSeconds * speed_) / stepSeconds_, 0.0, 1.0);
+}
+
 double FixedTimestep::secondsUntilNextStep() const noexcept {
   const double remaining = stepSeconds_ - accumulatedSeconds_;
   return remaining <= kStepTolerance * stepSeconds_ ? 0.0 : remaining / speed_;

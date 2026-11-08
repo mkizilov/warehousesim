@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#include "warehousesim/core/angle.hpp"
 #include "warehousesim/world/layouts.hpp"
 
 namespace warehousesim::simulation {
@@ -13,9 +14,14 @@ namespace {
 constexpr std::size_t kMaxRobots = 4;
 constexpr core::Tick kTaskSpawnInterval = 5;
 
-// Robots take two ticks to load and two to unload.
+// Robots take two ticks to load and two to unload, and drive like vehicles rather than like
+// sprites: they speed up at half a cell per tick squared, brake at one (so they stop within half
+// a cell from top speed), and stop at every corner to turn a quarter turn per tick.
 robots::RobotSpec handlingSpec() {
   robots::RobotSpec spec;
+  spec.acceleration = 0.5;
+  spec.deceleration = 1.0;
+  spec.turnRate = core::kPi / 2.0;
   spec.loadTicks = 2;
   spec.unloadTicks = 2;
   return spec;

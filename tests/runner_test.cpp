@@ -13,6 +13,7 @@ namespace {
 
 using std::chrono::milliseconds;
 using warehousesim::simulation::makeDemoSimulation;
+using warehousesim::simulation::makeLayoutSimulation;
 using warehousesim::simulation::SimulationRunner;
 
 constexpr milliseconds kTimeout{10000};
@@ -125,6 +126,114 @@ TEST(RunnerTest, NeverStartedRunnerExposesInitialState) {
   const SimulationRunner runner(makeDemoSimulation(1), milliseconds(1));
   EXPECT_EQ(runner.snapshot().tick, 0U);
   EXPECT_EQ(runner.warehouse().width(), 20);
+}
+
+// ---- the frame to draw ------------------------------------------------------------------
+
+TEST(RunnerFrameTest, BeforeAnyStepThereIsNothingToInterpolate) {
+  SimulationRunner runner(makeDemoSimulation(2), milliseconds(1));
+  const auto frame = runner.frame();
+  EXPECT_TRUE(frame.previous == frame.latest);
+  EXPECT_TRUE(frame.latest == runner.snapshot());
+  EXPECT_EQ(frame.latest.tick, 0U);
+  EXPECT_GE(frame.alpha, 0.0);
+  EXPECT_LE(frame.alpha, 1.0);
+}
+
+TEST(RunnerFrameTest, TheFrameHoldsTheLastTwoStatesAndSettlesOnTheFinalOneWhenTheRunEnds) {
+  SimulationRunner runner(makeLayoutSimulation("compact", 4).value(), milliseconds(1));
+  runner.start(30);
+  ASSERT_TRUE(runner.waitForTick(30, kTimeout));
+  // Wait for the worker to notice it has nothing left to do and settle the display on the end.
+  warehousesim::simulation::FrameState frame = runner.frame();
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (frame.alpha < 1.0 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(milliseconds(1));
+    frame = runner.frame();
+  }
+
+  auto reference = makeLayoutSimulation("compact", 4).value();
+  reference.run(29);
+  const auto atTick29 = reference.snapshot();
+  reference.step();
+  EXPECT_EQ(frame.latest.tick, 30U);
+  EXPECT_EQ(frame.previous.tick, 29U);
+  EXPECT_TRUE(frame.previous == atTick29);
+  EXPECT_TRUE(frame.latest == reference.snapshot());
+  EXPECT_DOUBLE_EQ(frame.alpha, 1.0);  // the display shows the final state completely
+}
+
+// The stepping is slow enough here (2 s per step) that no step happens while this test watches,
+// so the only thing that can change is how far through the step the display is.
+TEST(RunnerFrameTest, AlphaGrowsWithRealTimeAndStaysBetweenZeroAndOne) {
+  SimulationRunner runner(makeDemoSimulation(1), milliseconds(2000));
+  runner.start();
+  double last = -1.0;
+  bool grew = false;
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const auto frame = runner.frame();
+    ASSERT_GE(frame.alpha, 0.0);
+    ASSERT_LE(frame.alpha, 1.0);
+    if (frame.latest.tick == 0) {
+      ASSERT_GE(frame.alpha, last);  // never backwards within a step
+      last = frame.alpha;
+    }
+    if (frame.alpha > 0.1) {
+      grew = true;
+      break;
+    }
+    std::this_thread::sleep_for(milliseconds(2));
+  }
+  EXPECT_TRUE(grew);
+}
+
+TEST(RunnerFrameTest, PausingHoldsThePictureStillAndResumingCarriesOnFromThere) {
+  SimulationRunner runner(makeDemoSimulation(1), milliseconds(2000));
+  runner.start();
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (runner.frame().alpha < 0.15 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(milliseconds(2));
+  }
+  runner.setPaused(true);
+  const double held = runner.frame().alpha;
+  ASSERT_GE(held, 0.15);
+  std::this_thread::sleep_for(milliseconds(60));  // nothing may move while it is paused
+  EXPECT_DOUBLE_EQ(runner.frame().alpha, held);
+
+  runner.setPaused(false);
+  // It carries on from where it stood, never from the start of the step: every sample taken while
+  // the worker wakes up and starts ticking again is at or beyond the held position...
+  double alpha = runner.frame().alpha;
+  while (alpha < held + 0.05 && std::chrono::steady_clock::now() < deadline) {
+    ASSERT_GE(alpha, held - 1e-9);
+    std::this_thread::sleep_for(milliseconds(1));
+    alpha = runner.frame().alpha;
+  }
+  // ...and then it grows again.
+  EXPECT_GE(alpha, held + 0.05);
+}
+
+// However often the renderer asks for frames, the simulation computes the same thing.
+TEST(RunnerFrameTest, HowOftenTheRendererPollsDoesNotChangeWhatIsSimulated) {
+  auto reference = makeLayoutSimulation("compact", 5).value();
+  reference.run(250);
+  for (const int pollEveryMs : {0, 1, 7}) {
+    SimulationRunner runner(makeLayoutSimulation("compact", 5).value(), milliseconds(1));
+    runner.start(250);
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    while (runner.snapshot().tick < 250 && std::chrono::steady_clock::now() < deadline) {
+      const auto frame = runner.frame();
+      ASSERT_LE(frame.previous.tick, frame.latest.tick);
+      ASSERT_LE(frame.latest.tick - frame.previous.tick, 200U);
+      if (pollEveryMs > 0) {
+        std::this_thread::sleep_for(milliseconds(pollEveryMs));
+      }
+    }
+    ASSERT_TRUE(runner.waitForTick(250, kTimeout));
+    EXPECT_TRUE(runner.snapshot() == reference.snapshot()) << "polling every " << pollEveryMs;
+    runner.stop();
+  }
 }
 
 }  // namespace

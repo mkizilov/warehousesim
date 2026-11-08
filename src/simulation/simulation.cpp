@@ -13,6 +13,15 @@ using robots::NavigationGoal;
 using robots::Robot;
 using robots::RobotState;
 
+namespace {
+
+// One tick is one unit of simulated time for the motion model (speeds are cells per tick).
+constexpr double kStepLength = 1.0;
+// Rounds of turn, claim and drive that one step can hold.
+constexpr int kMaxMotionRounds = 8;
+
+}  // namespace
+
 Simulation::Simulation(world::Warehouse warehouse, const std::vector<Point>& robotStarts,
                        SimulationConfig config, std::unique_ptr<planning::PathPlanner> planner,
                        std::unique_ptr<tasks::Dispatcher> dispatcher)
@@ -71,6 +80,7 @@ bool Simulation::cancelTask(core::TaskId id) {
     Robot& robot = robotById(*holder);
     if (robot.task() == id) {
       robot.abortTask();
+      syncHolds(robot);
     }
   }
   return true;
@@ -90,6 +100,7 @@ bool Simulation::disableRobot(core::RobotId id) {
   }
   releaseTask(robot);
   robot.makeUnavailable();
+  syncHolds(robot);
   return true;
 }
 
@@ -123,9 +134,11 @@ Snapshot Simulation::snapshot() const {
   result.tick = clock_.tick();
   result.robots.reserve(robots_.size());
   for (const Robot& robot : robots_) {
-    result.robots.push_back({robot.id(), robot.position(), robot.heading(), robot.state(),
-                             robot.goal(), robot.speed(), robot.battery().level(),
-                             robot.battery().capacity(), robot.task()});
+    result.robots.push_back({robot.id(), robot.position(),
+                             RobotPose{robot.pose(), robot.headingAngle()}, robot.heading(),
+                             robot.state(), robot.goal(), robot.speed(), robot.battery().level(),
+                             robot.battery().capacity(), robot.task(), robot.motion(),
+                             robot.carriesCargo(), robot.deliveries()});
   }
   for (const tasks::Task& task : tasks_.all()) {
     if (task.isOpen()) {
@@ -187,7 +200,7 @@ void Simulation::updateRobot(Robot& robot) {
   settle(robot);
   breakDownIfDepleted(robot);
   robot.elapseTick();
-  if (robot.state() == RobotState::Navigating && robot.hasPath()) {
+  if (robot.hasPath()) {
     moveAlongPath(robot);
   }
 }
@@ -198,7 +211,8 @@ void Simulation::settle(Robot& robot) {
   while (true) {
     switch (robot.state()) {
       case RobotState::Idle:
-        if (!robot.needsCharge() || !dispatchToCharger(robot)) {
+        // A robot still coasting to a stop does not go anywhere new until it has stopped.
+        if (robot.hasPath() || !robot.needsCharge() || !dispatchToCharger(robot)) {
           return;
         }
         break;
@@ -301,35 +315,77 @@ void Simulation::breakDownIfDepleted(Robot& robot) {
       robot.state() != RobotState::Charging) {
     releaseTask(robot);
     robot.makeUnavailable();
+    syncHolds(robot);
   }
 }
 
+// One fixed step of one robot's motion. The world only ever sees whole cells: the robot first
+// claims the cells it needs ahead of it, drives within them, and the world is told about each
+// cell the robot passes. Where the robot really is between two cells is its own business.
 void Simulation::moveAlongPath(Robot& robot) {
-  if (!robot.travel()) {
-    return;  // a slow robot is still covering the cell
-  }
-  const Point next = *robot.nextStep();
-  bool blocked = world_.isOccupied(next);
-  if (blocked) {
-    robot.noteBlocked();
-    // When the blocker steps aside the cell is free right now. Take it immediately,
-    // otherwise the blocker would step straight back in on its own turn.
-    if (robot.blockedTicks() >= config_.maxBlockedTicks && resolveBlock(robot, next) &&
-        !world_.isOccupied(next)) {
-      blocked = false;
+  double timeLeft = kStepLength;
+  // A robot can come to rest at a corner and still have time in the step; it uses it to turn and
+  // set off again, as a shorter step would have. A couple of rounds is all a step can hold.
+  for (int round = 0; round < kMaxMotionRounds; ++round) {
+    if (robot.state() == RobotState::Navigating) {
+      // Face the next cell, then see whether it can be had. A robot that is still rotating has
+      // not asked for anything yet and holds nothing.
+      timeLeft = robot.turnTowardNext(timeLeft);
+      if (timeLeft <= 0.0) {
+        (void)robot.advance(0.0);
+        return;
+      }
+      claimAhead(robot, timeLeft);
+      if (robot.authority() == 0) {
+        // Not even the next cell is available.
+        bool freed = false;
+        if (round == 0) {
+          robot.noteBlocked();
+          // When the blocker steps aside the cell is free right now. Take it immediately,
+          // otherwise the blocker would step straight back in on its own turn.
+          if (robot.blockedTicks() >= config_.maxBlockedTicks &&
+              resolveBlock(robot, *robot.nextStep())) {
+            claimAhead(robot, timeLeft);
+            freed = robot.authority() > 0;
+          }
+        }
+        if (!freed) {
+          (void)robot.advance(0.0);  // waits where it is
+          return;
+        }
+      }
+    }
+    const std::uint32_t passed = robot.advance(timeLeft);
+    for (std::uint32_t i = 0; i < passed; ++i) {
+      if (!world_.advanceRobot(robot.id())) {
+        throw std::logic_error("the world and a robot disagree about the cells it holds");
+      }
+    }
+    timeLeft = robot.unusedTime();
+    if (timeLeft <= 0.0 || !robot.hasPath()) {
+      return;
     }
   }
-  if (blocked) {
-    robot.halt();
-    return;
-  }
-  // Planned steps are adjacent walkable cells, so the world can only reject one if the
-  // robot and the world have drifted apart.
-  if (world_.moveRobot(robot.id(), next) != world::MoveStatus::Ok) {
-    throw std::logic_error("world rejected a planned robot move");
-  }
-  robot.commitStep();
 }
+
+void Simulation::claimAhead(Robot& robot, double timeToDrive) {
+  const std::size_t wanted = robot.wantedAuthority(timeToDrive);
+  while (robot.authority() < wanted) {
+    const Point cell = robot.path()[robot.authority()];
+    const world::MoveStatus status = world_.claimCell(robot.id(), cell);
+    if (status == world::MoveStatus::CellOccupied) {
+      return;
+    }
+    // Planned steps are adjacent walkable cells, so the world can only reject one for another
+    // reason if the robot and the world have drifted apart.
+    if (status != world::MoveStatus::Ok) {
+      throw std::logic_error("world rejected a planned robot move");
+    }
+    robot.extendAuthority();
+  }
+}
+
+void Simulation::syncHolds(Robot& robot) { world_.releaseClaims(robot.id(), robot.authority()); }
 
 // Called once `robot` has waited maxBlockedTicks for `cell`. Priority is the robot id
 // (lower wins). An idle or lower-priority blocker gives way by stepping aside, unless it is
@@ -337,7 +393,16 @@ void Simulation::moveAlongPath(Robot& robot) {
 // breaks head-on and cyclic standoffs instead of both robots replanning symmetrically forever.
 // Returns true if the blocker moved away.
 bool Simulation::resolveBlock(Robot& robot, Point cell) {
-  Robot& blocker = *std::ranges::find(robots_, cell, &Robot::position);
+  const std::optional<core::RobotId> holder = world_.occupantAt(cell);
+  if (!holder) {
+    return false;
+  }
+  Robot& blocker = robotById(*holder);
+  // A robot that has been granted cells ahead is on its way and will clear this one by itself;
+  // pushing it aside or planning around it would only get in the way.
+  if (blocker.isCommitted()) {
+    return false;
+  }
   const bool blockerYields =
       !blocker.isStationary() && (blocker.state() == RobotState::Idle || blocker.id() > robot.id());
   if (blockerYields && stepAside(blocker)) {
@@ -414,6 +479,7 @@ void Simulation::releaseTask(Robot& robot) {
 void Simulation::failTask(Robot& robot) {
   tasks_.fail(*robot.task());
   robot.abortTask();
+  syncHolds(robot);
 }
 
 // The robot's destination became unreachable: fail its task (if any) and stand it down.
@@ -422,6 +488,7 @@ void Simulation::abortNavigation(Robot& robot) {
     failTask(robot);
   } else {
     robot.abortTask();
+    syncHolds(robot);
   }
 }
 

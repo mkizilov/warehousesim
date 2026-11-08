@@ -22,6 +22,7 @@ enum class MoveStatus : std::uint8_t {
   NotAdjacent,  // the target is not exactly one orthogonal step away
   BlockedByObstacle,
   CellOccupied,
+  HasClaims,  // the robot holds cells beyond the one it stands on, so it cannot be moved whole
 };
 
 enum class CellEdit : std::uint8_t {

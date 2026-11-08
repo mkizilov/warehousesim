@@ -6,6 +6,9 @@
 #include <sstream>
 #include <utility>
 
+#include "warehousesim/core/angle.hpp"
+#include "warehousesim/core/vec2.hpp"
+
 namespace warehousesim::view {
 
 namespace {
@@ -25,6 +28,7 @@ constexpr Color kActiveTask{90, 200, 230};
 constexpr Color kLetter{15, 15, 15};
 constexpr Color kRobotId{255, 255, 255};
 constexpr Color kHeadingMarker{250, 250, 250};
+constexpr Color kCargo{235, 215, 160};
 constexpr Color kGaugeBackground{20, 20, 24};
 constexpr Color kPanel{30, 33, 41};
 constexpr Color kPanelText{200, 205, 215};
@@ -114,37 +118,65 @@ void addTaskMarkers(DrawList& list, const simulation::Snapshot& snapshot, const 
   }
 }
 
-// A coloured square per robot (colour = state), a nub on the edge it is facing, and, when there
-// is room, its id and a battery gauge. Purely a picture of the snapshot; no behaviour lives here.
+// Where the heading nub goes on a robot's body. A robot facing a cardinal direction has it on the
+// middle of that edge; one part-way through a turn has it on the circle that passes through those
+// four places.
+ScreenRect headingMarker(const ScreenRect& body, double angle) {
+  const double nub = body.width * 0.25;
+  const double centerX = body.x + (body.width - nub) / 2.0;
+  const double centerY = body.y + (body.height - nub) / 2.0;
+  ScreenRect marker{centerX, centerY, nub, nub};
+  const core::Direction nearest = core::nearestDirection(angle);
+  if (std::fabs(core::shortestRotation(angle, core::angleOf(nearest))) <= core::kAngleEpsilon) {
+    switch (nearest) {
+      case core::Direction::North:
+        marker.y = body.y;
+        break;
+      case core::Direction::East:
+        marker.x = body.right() - nub;
+        break;
+      case core::Direction::South:
+        marker.y = body.bottom() - nub;
+        break;
+      case core::Direction::West:
+        marker.x = body.x;
+        break;
+    }
+    return marker;
+  }
+  marker.x += std::cos(angle) * (body.width - nub) / 2.0;
+  marker.y += std::sin(angle) * (body.height - nub) / 2.0;
+  return marker;
+}
+
+// A coloured square per robot (colour = state) at its continuous pose, a nub on the side it is
+// facing, a box on top while it carries cargo and, when there is room, its id and a battery
+// gauge. Purely a picture of the snapshot; no behaviour lives here.
 void addRobots(DrawList& list, const simulation::Snapshot& snapshot, const Camera& camera,
                const CellRange& range) {
   for (const simulation::RobotSnapshot& robot : snapshot.robots) {
-    if (!contains(range, robot.position)) {
+    // The pose can be outside the logical cell (a robot between two cells, or an interpolated
+    // one), so a robot is on screen if either its cell or the cell under its centre is.
+    const core::Vec2 center = robot.center();
+    const Point visualCell{static_cast<std::int32_t>(std::floor(center.x)),
+                           static_cast<std::int32_t>(std::floor(center.y))};
+    if (!contains(range, robot.position) && !contains(range, visualCell)) {
       continue;
     }
-    const ScreenRect rect = inset(camera.cellRect(robot.position), 0.15);
+    // The body is the usual square in the logical cell, moved by how far the pose is from that
+    // cell's centre. At rest that offset is exactly zero.
+    ScreenRect rect = inset(camera.cellRect(robot.position), 0.15);
+    rect.x += (center.x - (static_cast<double>(robot.position.x) + 0.5)) * camera.zoom();
+    rect.y += (center.y - (static_cast<double>(robot.position.y) + 0.5)) * camera.zoom();
     list.commands.emplace_back(FillRect{rect, robotColor(robot.state, robot.goal)});
 
+    if (robot.carrying) {
+      list.commands.emplace_back(FillRect{inset(rect, 0.3), kCargo});
+    }
+
     if (camera.zoom() >= kMinZoomForHeading) {
-      const double nub = rect.width * 0.25;
-      const double centerX = rect.x + (rect.width - nub) / 2.0;
-      const double centerY = rect.y + (rect.height - nub) / 2.0;
-      ScreenRect marker{centerX, centerY, nub, nub};
-      switch (robot.heading) {
-        case core::Direction::North:
-          marker.y = rect.y;
-          break;
-        case core::Direction::East:
-          marker.x = rect.right() - nub;
-          break;
-        case core::Direction::South:
-          marker.y = rect.bottom() - nub;
-          break;
-        case core::Direction::West:
-          marker.x = rect.x;
-          break;
-      }
-      list.commands.emplace_back(FillRect{marker, kHeadingMarker});
+      list.commands.emplace_back(
+          FillRect{headingMarker(rect, robot.headingAngle()), kHeadingMarker});
     }
 
     if (camera.zoom() >= kMinZoomForRobotIds) {

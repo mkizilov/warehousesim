@@ -12,8 +12,11 @@ function(warehousesim_configure_target target)
       target_compile_options(${target} PRIVATE /WX)
     endif()
   else()
+    # Motion is floating-point maths that must come out the same on every platform. Fused
+    # multiply-add (contracted by default on some compilers and CPUs) rounds differently, so
+    # it is turned off: every result is then plain IEEE arithmetic.
     target_compile_options(${target} PRIVATE
-      -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion)
+      -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -ffp-contract=off)
     if(WAREHOUSESIM_WARNINGS_AS_ERRORS)
       target_compile_options(${target} PRIVATE -Werror)
     endif()

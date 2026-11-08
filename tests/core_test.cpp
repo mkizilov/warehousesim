@@ -8,22 +8,34 @@
 #include <unordered_set>
 #include <vector>
 
+#include "warehousesim/core/angle.hpp"
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/direction_set.hpp"
 #include "warehousesim/core/fixed_timestep.hpp"
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/core/rng.hpp"
+#include "warehousesim/core/vec2.hpp"
 
 namespace {
 
+using warehousesim::core::angleOf;
+using warehousesim::core::Direction;
+using warehousesim::core::FixedTimestep;
+using warehousesim::core::kPi;
+using warehousesim::core::lerp;
+using warehousesim::core::lerpAngle;
 using warehousesim::core::manhattanDistance;
+using warehousesim::core::nearestDirection;
 using warehousesim::core::Point;
 using warehousesim::core::PointHash;
 using warehousesim::core::Rng;
 using warehousesim::core::RobotId;
+using warehousesim::core::shortestRotation;
 using warehousesim::core::SimClock;
 using warehousesim::core::TaskId;
+using warehousesim::core::Vec2;
+using warehousesim::core::wrapAngle;
 
 Point P(int x, int y) { return Point{x, y}; }
 
@@ -267,6 +279,150 @@ TEST(FixedTimestepTest, RejectsInvalidElapsedTime) {
 TEST(SimClockTest, RejectsNonPositiveStep) {
   EXPECT_THROW(SimClock(0.0), std::invalid_argument);
   EXPECT_THROW(SimClock(-1.0), std::invalid_argument);
+}
+
+TEST(FixedTimestepTest, AlphaIsHowFarIntoTheNextStepTheCarriedTimeReaches) {
+  FixedTimestep stepper(0.1);
+  EXPECT_DOUBLE_EQ(stepper.alpha(), 0.0);
+  EXPECT_EQ(stepper.advance(0.025), 0U);
+  EXPECT_NEAR(stepper.alpha(), 0.25, 1e-12);
+  EXPECT_EQ(stepper.advance(0.1), 1U);  // 0.125 s in all: one step, 0.025 s left over
+  EXPECT_NEAR(stepper.alpha(), 0.25, 1e-12);
+  stepper.setSpeed(2.0);
+  EXPECT_EQ(stepper.advance(0.0125), 0U);  // 0.0125 s of real time is 0.025 s of simulated time
+  EXPECT_NEAR(stepper.alpha(), 0.5, 1e-12);
+}
+
+TEST(FixedTimestepTest, AlphaAfterLooksAheadWithoutConsumingAnyTime) {
+  FixedTimestep stepper(0.1);
+  EXPECT_EQ(stepper.advance(0.03), 0U);
+  EXPECT_NEAR(stepper.alphaAfter(0.0), 0.3, 1e-12);
+  EXPECT_NEAR(stepper.alphaAfter(0.04), 0.7, 1e-12);
+  EXPECT_DOUBLE_EQ(stepper.alphaAfter(10.0), 1.0);  // never past the end of the step
+  EXPECT_NEAR(stepper.alpha(), 0.3, 1e-12);         // asking changed nothing
+  EXPECT_EQ(stepper.advance(0.07), 1U);
+
+  stepper.setSpeed(0.5);  // half speed: real time counts for half
+  EXPECT_NEAR(stepper.alphaAfter(0.04), 0.2, 1e-12);
+  EXPECT_THROW((void)stepper.alphaAfter(-0.1), std::invalid_argument);
+  EXPECT_THROW((void)stepper.alphaAfter(std::numeric_limits<double>::quiet_NaN()),
+               std::invalid_argument);
+}
+
+TEST(FixedTimestepTest, AFrameRateOnlyChangesWhichInstantsTheDisplayIsSampledAt) {
+  // However the same 1.05 s of real time is cut into frames, the simulation is owed the same
+  // steps and the display ends the same fraction of the way into the next one.
+  for (const double frame : {1.0 / 24.0, 1.0 / 60.0, 1.0 / 144.0, 0.3}) {
+    FixedTimestep stepper(0.1);
+    std::uint32_t steps = 0;
+    const int frames = static_cast<int>(std::lround(1.05 / frame));
+    for (int i = 0; i < frames; ++i) {
+      steps += stepper.advance(frame);
+    }
+    const double total = frames * frame;
+    EXPECT_EQ(steps, static_cast<std::uint32_t>(std::floor(total / 0.1 + 1e-9))) << frame;
+    EXPECT_NEAR(stepper.alpha(), total / 0.1 - static_cast<double>(steps), 1e-6) << frame;
+  }
+}
+
+TEST(FixedTimestepTest, ResetCanResumeFromAPositionInsideAStep) {
+  FixedTimestep stepper(0.1);
+  EXPECT_EQ(stepper.advance(0.06), 0U);
+  stepper.reset(0.6);
+  EXPECT_NEAR(stepper.alpha(), 0.6, 1e-12);
+  EXPECT_NEAR(stepper.secondsUntilNextStep(), 0.04, 1e-12);
+  EXPECT_EQ(stepper.advance(0.04), 1U);
+
+  stepper.reset(7.0);  // clamped to the end of the step
+  EXPECT_DOUBLE_EQ(stepper.alpha(), 1.0);
+  stepper.reset(-3.0);
+  EXPECT_DOUBLE_EQ(stepper.alpha(), 0.0);
+  stepper.reset(std::numeric_limits<double>::quiet_NaN());
+  EXPECT_DOUBLE_EQ(stepper.alpha(), 0.0);
+  stepper.reset();
+  EXPECT_DOUBLE_EQ(stepper.alpha(), 0.0);
+}
+
+// ---- angles and continuous positions ---------------------------------------------------------
+
+TEST(AngleTest, CardinalDirectionsRunClockwiseFromEastWithYPointingDown) {
+  EXPECT_DOUBLE_EQ(angleOf(Direction::East), 0.0);
+  EXPECT_DOUBLE_EQ(angleOf(Direction::South), kPi / 2.0);
+  EXPECT_DOUBLE_EQ(angleOf(Direction::West), kPi);
+  EXPECT_DOUBLE_EQ(angleOf(Direction::North), -kPi / 2.0);
+  for (const Direction d : warehousesim::core::kAllDirections) {
+    const Point step = warehousesim::core::offsetOf(d);
+    EXPECT_NEAR(std::cos(angleOf(d)), step.x, 1e-12);
+    EXPECT_NEAR(std::sin(angleOf(d)), step.y, 1e-12);
+  }
+}
+
+TEST(AngleTest, WrappingKeepsEveryAngleInTheHalfOpenRangeMinusPiToPi) {
+  EXPECT_DOUBLE_EQ(wrapAngle(0.0), 0.0);
+  EXPECT_DOUBLE_EQ(wrapAngle(kPi), kPi);   // +pi is in the range...
+  EXPECT_DOUBLE_EQ(wrapAngle(-kPi), kPi);  // ...and -pi is the same angle, so it maps to +pi
+  EXPECT_NEAR(wrapAngle(3.0 * kPi / 2.0), -kPi / 2.0, 1e-12);
+  EXPECT_NEAR(wrapAngle(-3.0 * kPi / 2.0), kPi / 2.0, 1e-12);
+  EXPECT_NEAR(wrapAngle(100.0 * kPi + 0.25), 0.25, 1e-9);
+  Rng rng(3);
+  for (int i = 0; i < 1000; ++i) {
+    const double angle = (static_cast<double>(rng.below(2'000'001)) - 1'000'000.0) / 1000.0;
+    const double wrapped = wrapAngle(angle);
+    EXPECT_GT(wrapped, -kPi);
+    EXPECT_LE(wrapped, kPi);
+    EXPECT_NEAR(std::cos(wrapped), std::cos(angle), 1e-9);
+    EXPECT_NEAR(std::sin(wrapped), std::sin(angle), 1e-9);
+  }
+}
+
+TEST(AngleTest, TheShortestRotationTakesTheShortWayRoundAndUTurnsGoClockwise) {
+  EXPECT_NEAR(shortestRotation(0.0, kPi / 2.0), kPi / 2.0, 1e-12);
+  EXPECT_NEAR(shortestRotation(kPi / 2.0, 0.0), -kPi / 2.0, 1e-12);
+  // North to West is a quarter turn anticlockwise, not three quarters clockwise.
+  EXPECT_NEAR(shortestRotation(angleOf(Direction::North), angleOf(Direction::West)), -kPi / 2.0,
+              1e-12);
+  EXPECT_NEAR(shortestRotation(angleOf(Direction::West), angleOf(Direction::North)), kPi / 2.0,
+              1e-12);
+  EXPECT_NEAR(shortestRotation(angleOf(Direction::East), angleOf(Direction::West)), kPi, 1e-12);
+  EXPECT_NEAR(shortestRotation(angleOf(Direction::West), angleOf(Direction::East)), kPi, 1e-12);
+  EXPECT_NEAR(shortestRotation(angleOf(Direction::North), angleOf(Direction::South)), kPi, 1e-12);
+  EXPECT_NEAR(shortestRotation(1.0, 1.0), 0.0, 1e-15);
+}
+
+TEST(AngleTest, InterpolatingAnAngleStaysOnTheShortArcAndHitsItsEndsExactly) {
+  const double west = angleOf(Direction::West);
+  const double north = angleOf(Direction::North);
+  EXPECT_DOUBLE_EQ(lerpAngle(west, north, 0.0), west);
+  EXPECT_DOUBLE_EQ(lerpAngle(west, north, 1.0), north);
+  EXPECT_DOUBLE_EQ(lerpAngle(west, north, -4.0), west);  // clamped
+  EXPECT_DOUBLE_EQ(lerpAngle(west, north, 9.0), north);
+  // Half way from west (pi) to north (-pi/2) is north-west, 5 pi / 4 = -3 pi / 4, not east.
+  EXPECT_NEAR(lerpAngle(west, north, 0.5), -3.0 * kPi / 4.0, 1e-12);
+  EXPECT_NEAR(lerpAngle(0.0, kPi / 2.0, 0.25), kPi / 8.0, 1e-12);
+}
+
+TEST(AngleTest, TheNearestDirectionRoundsToTheClosestCardinal) {
+  for (const Direction d : warehousesim::core::kAllDirections) {
+    EXPECT_EQ(nearestDirection(angleOf(d)), d);
+    EXPECT_EQ(nearestDirection(angleOf(d) + 0.3), d);
+    EXPECT_EQ(nearestDirection(angleOf(d) - 0.3), d);
+    EXPECT_EQ(nearestDirection(angleOf(d) + 2.0 * kPi), d);
+  }
+  EXPECT_EQ(nearestDirection(0.7), Direction::East);   // 40 degrees
+  EXPECT_EQ(nearestDirection(0.9), Direction::South);  // 52 degrees
+}
+
+TEST(Vec2Test, ArithmeticIsComponentwiseAndLerpHitsBothEndsExactly) {
+  const Vec2 a{0.1, 0.7};
+  const Vec2 b{0.3, -0.2};
+  EXPECT_EQ(a + b, (Vec2{0.1 + 0.3, 0.7 + -0.2}));
+  EXPECT_EQ(b - a, (Vec2{0.3 - 0.1, -0.2 - 0.7}));
+  EXPECT_EQ(a * 2.0, (Vec2{0.2, 1.4}));
+  EXPECT_EQ(lerp(a, b, 0.0), a);  // exact, with no rounding from (b - a)
+  EXPECT_EQ(lerp(a, b, 1.0), b);
+  EXPECT_NEAR(lerp(a, b, 0.5).x, 0.2, 1e-15);
+  EXPECT_NEAR(lerp(a, b, 0.5).y, 0.25, 1e-15);
+  EXPECT_EQ(Vec2{}, (Vec2{0.0, 0.0}));
 }
 
 }  // namespace

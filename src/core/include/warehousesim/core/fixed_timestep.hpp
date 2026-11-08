@@ -41,8 +41,18 @@ class FixedTimestep {
   // Real seconds until advance() would next return at least one step (0 if one is due).
   [[nodiscard]] double secondsUntilNextStep() const noexcept;
 
-  // Forgets any carried-over time, e.g. when resuming after a pause.
-  void reset() noexcept { accumulatedSeconds_ = 0.0; }
+  // How far into the next step the carried-over time reaches, in [0, 1). A renderer that draws
+  // between steps uses this to interpolate; it never changes what the steps compute.
+  [[nodiscard]] double alpha() const noexcept { return accumulatedSeconds_ / stepSeconds_; }
+  // The same fraction after `realSeconds` more real time have passed, without consuming them,
+  // clamped to [0, 1]. Throws std::invalid_argument unless realSeconds is finite and >= 0.
+  [[nodiscard]] double alphaAfter(double realSeconds) const;
+
+  // Forgets carried-over time, e.g. when resuming after a pause, so that the time spent
+  // paused is not replayed. `alpha` (clamped to [0, 1], 0 if not finite) is how far into a step
+  // the clock should be taken to be, so that a display that froze part-way through a step
+  // carries on from there instead of jumping back to its start.
+  void reset(double alpha = 0.0) noexcept;
 
  private:
   double stepSeconds_;

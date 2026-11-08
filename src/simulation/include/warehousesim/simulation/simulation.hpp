@@ -7,10 +7,13 @@
 #include <utility>
 #include <vector>
 
+#include "warehousesim/core/angle.hpp"
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
+#include "warehousesim/core/vec2.hpp"
 #include "warehousesim/planning/path_planner.hpp"
+#include "warehousesim/robots/motion.hpp"
 #include "warehousesim/robots/robot.hpp"
 #include "warehousesim/robots/robot_spec.hpp"
 #include "warehousesim/robots/robot_state.hpp"
@@ -38,9 +41,21 @@ struct SimulationConfig {
   robots::RobotSpec robot;
 };
 
+// Where a robot really is, as opposed to the cell it is logically in.
+struct RobotPose {
+  core::Vec2 center;     // world space: cell (x, y) has its centre at (x + 0.5, y + 0.5)
+  double heading = 0.0;  // radians: east 0, south pi/2, west pi, north -pi/2
+
+  bool operator==(const RobotPose&) const = default;
+};
+
 struct RobotSnapshot {
   core::RobotId id;
+  // The logical cell: what occupancy, planning and tasks see.
   core::Point position;
+  // The continuous pose, between cells while the robot drives. Absent means at rest in the
+  // centre of `position`, facing `heading`.
+  std::optional<RobotPose> pose;
   core::Direction heading = core::Direction::North;
   robots::RobotState state = robots::RobotState::Idle;
   robots::NavigationGoal goal = robots::NavigationGoal::None;
@@ -48,6 +63,19 @@ struct RobotSnapshot {
   robots::Battery::Units batteryLevel = 0;
   robots::Battery::Units batteryCapacity = 1;
   std::optional<core::TaskId> task;
+  robots::MotionPhase motion = robots::MotionPhase::Stopped;
+  bool carrying = false;         // holds cargo between loading and unloading
+  std::uint64_t deliveries = 0;  // cargo handed over at dropoffs so far
+
+  // Where to draw the robot: its continuous pose, or the centre of its cell if it has none.
+  [[nodiscard]] core::Vec2 center() const noexcept {
+    return pose ? pose->center
+                : core::Vec2{static_cast<double>(position.x) + 0.5,
+                             static_cast<double>(position.y) + 0.5};
+  }
+  [[nodiscard]] double headingAngle() const noexcept {
+    return pose ? pose->heading : core::angleOf(heading);
+  }
 
   bool operator==(const RobotSnapshot&) const = default;
 };
@@ -82,15 +110,17 @@ class Simulation {
   core::TaskId submitTask(core::Point pickup, core::Point dropoff,
                           tasks::TaskPriority priority = tasks::TaskPriority::Normal);
   // Withdraws a task. A robot working on it stops and becomes idle (cargo it carried is dropped).
-  // Returns false if the task had already completed, failed or been cancelled; throws
-  // std::out_of_range for an unknown id.
+  // A robot that is between two cells at that moment does not stop dead: it brakes along the cells
+  // it already holds and stops at the first waypoint it can reach, so it is Idle straight away
+  // but not yet available. Returns false if the task had already completed, failed or been
+  // cancelled; throws std::out_of_range for an unknown id.
   bool cancelTask(core::TaskId id);
 
   // Operator controls. Disabling takes a robot out of service (state Unavailable): a task it
   // had not collected yet goes back to Pending, a task it was carrying fails. Restoring returns
   // it to Idle, swapping in a fresh battery first if the old one is flat. Both return false when
   // the robot is already in the requested condition, and throw std::out_of_range for an
-  // unknown id.
+  // unknown id. A robot taken out of service between two cells coasts to a stop like above.
   bool disableRobot(core::RobotId id);
   bool restoreRobot(core::RobotId id);
 
@@ -117,6 +147,12 @@ class Simulation {
       const robots::Robot& robot) const;
   void breakDownIfDepleted(robots::Robot& robot);
   void moveAlongPath(robots::Robot& robot);
+  // Claims in the world, in path order, the cells the robot wants to be granted for driving
+  // `timeToDrive` ticks and tells the robot about each; stops at the first cell somebody else
+  // holds.
+  void claimAhead(robots::Robot& robot, double timeToDrive);
+  // Gives back every claimed cell beyond what the robot has been granted.
+  void syncHolds(robots::Robot& robot);
   bool resolveBlock(robots::Robot& robot, core::Point cell);
   bool stepAside(robots::Robot& robot);
   [[nodiscard]] planning::BlockedSet occupiedCells() const;

@@ -8,7 +8,7 @@ function(warehousesim_add_test name)
   if(MSVC)
     target_compile_options(${name} PRIVATE /W4)
   else()
-    target_compile_options(${name} PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(${name} PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
     if(WAREHOUSESIM_WARNINGS_AS_ERRORS)
       target_compile_options(${name} PRIVATE -Werror)
     endif()
@@ -44,10 +44,13 @@ if(NOT WAREHOUSESIM_SANITIZE)
     LIBS warehousesim::testing_allocation)
 endif()
 
-# Linked against core and robots only: the robot entity and its state machine need no world,
-# planner, simulation, rendering or SDL.
+# Linked against core and robots only: the robot entity, its state machine and its motion model
+# need no world, planner, simulation, rendering or SDL.
 warehousesim_add_test(warehousesim_robot_tests
-  SOURCES robots_test.cpp
+  SOURCES
+    motion_test.cpp
+    robot_motion_test.cpp
+    robots_test.cpp
   LIBS warehousesim::robots)
 
 # Task queue, estimators, generator and dispatcher need the planner and robots but no simulation,
@@ -65,6 +68,8 @@ warehousesim_add_test(warehousesim_task_tests
 warehousesim_add_test(warehousesim_tests
   SOURCES
     camera_test.cpp
+    interpolation_test.cpp
+    movement_test.cpp
     runner_test.cpp
     scene_test.cpp
     simulation_dispatch_test.cpp

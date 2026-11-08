@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -282,6 +283,123 @@ TEST(WorldTest, RandomMovesAndEditsNeverBreakTheInvariants) {
     }
     ASSERT_EQ(world.occupancy().robotCount(), robots.size());
   }
+}
+
+// ---- claiming the cells ahead -------------------------------------------------------------
+
+TEST(WorldClaimTest, AClaimIsOneStepBeyondTheLastCellHeldAndOnlyOntoFreeWalkableCells) {
+  World world = worldFrom({"....", ".#S.", "...."});
+  ASSERT_TRUE(world.addRobot(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(world.addRobot(R(2), P(3, 0)) == PlaceStatus::Ok);
+
+  EXPECT_TRUE(world.checkClaim(R(1), P(1, 1)) == MoveStatus::NotAdjacent);  // diagonal
+  EXPECT_TRUE(world.checkClaim(R(1), P(2, 0)) == MoveStatus::NotAdjacent);  // two steps
+  EXPECT_TRUE(world.checkClaim(R(1), P(0, 0)) == MoveStatus::NotAdjacent);  // not its own cell
+  EXPECT_TRUE(world.checkClaim(R(1), P(-1, 0)) == MoveStatus::OutOfBounds);
+  EXPECT_TRUE(world.checkClaim(R(9), P(1, 0)) == MoveStatus::UnknownRobot);
+  ASSERT_TRUE(world.claimCell(R(1), P(1, 0)) == MoveStatus::Ok);
+  // Adjacency is to the last cell held: (1, 0) now, not the starting cell.
+  EXPECT_TRUE(world.checkClaim(R(1), P(1, 1)) == MoveStatus::BlockedByObstacle);  // wall
+  EXPECT_TRUE(world.checkClaim(R(1), P(0, 1)) == MoveStatus::NotAdjacent);
+  ASSERT_TRUE(world.claimCell(R(1), P(2, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(world.checkClaim(R(1), P(2, 1)) == MoveStatus::BlockedByObstacle);  // shelf
+  EXPECT_TRUE(world.claimCell(R(1), P(3, 0)) == MoveStatus::CellOccupied);  // robot 2 stands there
+  EXPECT_TRUE(world.claimCell(R(2), P(2, 0)) == MoveStatus::CellOccupied);  // robot 1 claimed it
+  EXPECT_EQ(world.holdsOf(R(1)), (std::vector<Point>{P(0, 0), P(1, 0), P(2, 0)}));
+  EXPECT_EQ(world.holdsOf(R(2)), (std::vector<Point>{P(3, 0)}));  // refusals changed nothing
+}
+
+TEST(WorldClaimTest, ClaimedCellsAreOccupiedForEveryoneElseButStillWalkable) {
+  World world = worldFrom({"..."});
+  ASSERT_TRUE(world.addRobot(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(world.claimCell(R(1), P(1, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(world.isWalkable(P(1, 0)));
+  EXPECT_TRUE(world.isOccupied(P(1, 0)));
+  EXPECT_FALSE(world.isFree(P(1, 0)));
+  EXPECT_EQ(world.occupantAt(P(1, 0)), R(1));
+  EXPECT_TRUE(world.freeNeighbors(P(2, 0)).empty());  // the only neighbour is claimed
+  EXPECT_TRUE(world.addRobot(R(2), P(1, 0)) == PlaceStatus::CellOccupied);
+  // A wall cannot be built on a cell a robot is about to drive through.
+  EXPECT_TRUE(world.placeObstacle(P(1, 0), CellType::Wall) == CellEdit::OccupiedByRobot);
+  EXPECT_EQ(world.layout().at(P(1, 0)), CellType::Free);
+}
+
+TEST(WorldClaimTest, ARobotThatHoldsClaimedCellsCannotTakeAWholeStep) {
+  World world = worldFrom({"...."});
+  ASSERT_TRUE(world.addRobot(R(1), P(1, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(world.claimCell(R(1), P(2, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(world.checkMove(R(1), P(0, 0)) == MoveStatus::HasClaims);
+  EXPECT_TRUE(world.moveRobot(R(1), P(0, 0)) == MoveStatus::HasClaims);
+  EXPECT_EQ(world.occupancy().positionOf(R(1)), P(1, 0));
+  EXPECT_EQ(world.releaseClaims(R(1), 0), 1U);
+  EXPECT_FALSE(world.isOccupied(P(2, 0)));
+  EXPECT_TRUE(world.moveRobot(R(1), P(0, 0)) == MoveStatus::Ok);
+}
+
+TEST(WorldClaimTest, PassingACellMovesTheRobotOntoItAndFreesTheOneBehind) {
+  World world = worldFrom({"..."});
+  ASSERT_TRUE(world.addRobot(R(1), P(0, 0)) == PlaceStatus::Ok);
+  ASSERT_TRUE(world.claimCell(R(1), P(1, 0)) == MoveStatus::Ok);
+  ASSERT_TRUE(world.claimCell(R(1), P(2, 0)) == MoveStatus::Ok);
+  EXPECT_TRUE(world.advanceRobot(R(1)));
+  EXPECT_EQ(world.occupancy().positionOf(R(1)), P(1, 0));
+  EXPECT_TRUE(world.isFree(P(0, 0)));
+  EXPECT_TRUE(world.advanceRobot(R(1)));
+  EXPECT_FALSE(world.advanceRobot(R(1)));  // nothing left to pass
+  EXPECT_EQ(world.holdsOf(R(1)), (std::vector<Point>{P(2, 0)}));
+}
+
+// Random driving: robots claim, pass and give back cells. They never share a cell, and never hold
+// a wall or a shelf.
+TEST(WorldClaimTest, RobotsDrivingAtRandomNeverShareACellOrHoldAnObstacle) {
+  World world = worldFrom({"......", ".#..S.", "......", ".S..#.", "......"});
+  Rng rng(5);
+  const std::vector<RobotId> robots = {R(1), R(2), R(3), R(4)};
+  const std::vector<Point> starts = {P(0, 0), P(5, 0), P(0, 4), P(5, 4)};
+  for (std::size_t i = 0; i < robots.size(); ++i) {
+    ASSERT_TRUE(world.addRobot(robots[i], starts[i]) == PlaceStatus::Ok);
+  }
+  int claimed = 0;
+  int refused = 0;
+  for (int step = 0; step < 3000; ++step) {
+    const RobotId robot = robots[rng.below(robots.size())];
+    switch (rng.below(3)) {
+      case 0: {
+        const Point last = world.holdsOf(robot).back();
+        const Point target = last + warehousesim::core::kCardinalDirections[rng.below(4)];
+        const MoveStatus expected = !world.inBounds(target)    ? MoveStatus::OutOfBounds
+                                    : world.isObstacle(target) ? MoveStatus::BlockedByObstacle
+                                    : world.isOccupied(target) ? MoveStatus::CellOccupied
+                                                               : MoveStatus::Ok;
+        const MoveStatus status = world.claimCell(robot, target);
+        EXPECT_TRUE(status == expected);
+        (status == MoveStatus::Ok ? claimed : refused) += 1;
+        break;
+      }
+      case 1:
+        (void)world.advanceRobot(robot);
+        break;
+      default:
+        (void)world.releaseClaims(robot, rng.below(3));
+        break;
+    }
+    std::vector<Point> seen;
+    for (const RobotId id : robots) {
+      const std::vector<Point> held = world.holdsOf(id);
+      ASSERT_FALSE(held.empty());
+      for (const Point cell : held) {
+        ASSERT_TRUE(world.isWalkable(cell));
+        ASSERT_EQ(world.occupantAt(cell), id);
+        ASSERT_TRUE(std::find(seen.begin(), seen.end(), cell) == seen.end());
+        seen.push_back(cell);
+      }
+      for (std::size_t i = 1; i < held.size(); ++i) {
+        ASSERT_EQ(warehousesim::core::manhattanDistance(held[i - 1], held[i]), 1);
+      }
+    }
+  }
+  EXPECT_GT(claimed, 300);
+  EXPECT_GT(refused, 300);
 }
 
 }  // namespace

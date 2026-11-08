@@ -20,7 +20,8 @@ SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseco
     : simulation_(std::move(simulation)),
       warehouse_(simulation_.warehouse()),
       stepper_(std::chrono::duration_cast<Seconds>(stepDuration).count()),
-      latest_(simulation_.snapshot()) {}
+      latest_(simulation_.snapshot()),
+      previous_(latest_) {}
 
 SimulationRunner::~SimulationRunner() { stop(); }
 
@@ -50,6 +51,11 @@ void SimulationRunner::stop() {
 void SimulationRunner::setPaused(bool paused) {
   {
     const std::scoped_lock lock(mutex_);
+    if (paused && !paused_ && ticking_) {
+      // Freeze the picture exactly where it is now.
+      frozenAlpha_ =
+          stepper_.alphaAfter(std::max(0.0, Seconds(SteadyClock::now() - lastAdvance_).count()));
+    }
     paused_ = paused;
     ++controlEpoch_;
   }
@@ -75,6 +81,15 @@ Snapshot SimulationRunner::snapshot() const {
   return latest_;
 }
 
+FrameState SimulationRunner::frame() const {
+  const std::scoped_lock lock(mutex_);
+  double alpha = frozenAlpha_;
+  if (ticking_ && !paused_) {
+    alpha = stepper_.alphaAfter(std::max(0.0, Seconds(SteadyClock::now() - lastAdvance_).count()));
+  }
+  return {previous_, latest_, alpha};
+}
+
 bool SimulationRunner::waitForTick(core::Tick tick, std::chrono::milliseconds timeout) const {
   std::unique_lock lock(mutex_);
   return published_.wait_for(lock, timeout, [&] { return latest_.tick >= tick; });
@@ -86,21 +101,23 @@ bool SimulationRunner::shouldStep() const {
 
 void SimulationRunner::loop() {
   std::unique_lock lock(mutex_);
-  bool running = false;
-  SteadyClock::time_point last;
   while (true) {
     if (!shouldStep()) {
-      running = false;
+      if (ticking_ && !paused_) {
+        frozenAlpha_ = 1.0;  // out of steps to take: the display settles on the final state
+      }
+      ticking_ = false;
       wake_.wait(lock, [this] { return stopRequested_ || shouldStep(); });
     }
     if (stopRequested_) {
       return;
     }
-    if (!running) {
-      // Time spent paused (or finished) must not be replayed as a burst of steps.
-      stepper_.reset();
-      last = SteadyClock::now();
-      running = true;
+    if (!ticking_) {
+      // Time spent paused (or finished) must not be replayed as a burst of steps, but the
+      // display carries on from where it stood.
+      stepper_.reset(frozenAlpha_);
+      lastAdvance_ = SteadyClock::now();
+      ticking_ = true;
     }
 
     // Sleep until the next step is due, waking early if stopped, paused or re-speeded.
@@ -113,19 +130,22 @@ void SimulationRunner::loop() {
     }
 
     const SteadyClock::time_point now = SteadyClock::now();
-    const Seconds elapsed = now - last;
-    last = now;
+    const Seconds elapsed = now - lastAdvance_;
     if (paused_) {
-      continue;
+      continue;  // setPaused already froze the display
     }
+    lastAdvance_ = now;
     std::uint32_t due = stepper_.advance(elapsed.count());
     bool stepped = false;
+    Snapshot beforeLastStep;
     while (due > 0 && shouldStep()) {
+      beforeLastStep = simulation_.snapshot();
       simulation_.step();
       stepped = true;
       --due;
     }
     if (stepped) {
+      previous_ = std::move(beforeLastStep);
       latest_ = simulation_.snapshot();
       published_.notify_all();
     }

@@ -26,13 +26,13 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | Module       | Responsibility                                        | May depend on                        |
 |--------------|-------------------------------------------------------|--------------------------------------|
 | `core`       | points, ids, clock, deterministic RNG                 | std only                             |
-| `world`      | grid model: cell types, static layout, robot occupancy, predefined layouts | core            |
-| `robots`     | robot entity: pose, battery, task, path, state machine | core                                |
+| `world`      | grid model: cell types, static layout, robot occupancy (cell plus claimed cells), predefined layouts | core |
+| `robots`     | robot entity: pose, motion model, battery, task, path, state machine | core                  |
 | `planning`   | `PathPlanner` interface, A* with options, results, reused workspace | core, world            |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `simulation` | tick engine, runner thread, JSON, demo scenario       | all of the above, nlohmann_json      |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
-| `view`       | camera, scene (draw list), input -> view logic; no SDL | core, world, simulation             |
+| `view`       | camera, scene (draw list), interpolation, input -> view logic; no SDL | core, world, simulation |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
 `apps/cli` (headless) and `apps/gui` (SDL3) are thin `main()`s. Tests are in `tests/`.
@@ -43,6 +43,10 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   add a link just to reach a header — move the type inward instead.
 - Only `simulation` knows about JSON, and only `rendering` (private) knows about SDL. The simulation
   library, `view`, the CLI and every test must build and run with no display and no SDL.
+- The frame rate must never reach the simulation. The GUI draws `view::blend(frame.previous,
+  frame.latest, frame.alpha)` from `SimulationRunner::frame()`; `alpha` comes from `core::FixedTimestep`, the
+  picture is a function of real time only (`FrameRateTest`), and nothing outside the runner and the GUI
+  reads a clock.
 - Everything the GUI shows is decided in `view`: `buildScene()` turns simulation state plus the `Camera`
   into a plain `DrawList`, and `ViewController` turns an SDL-free `InputEvents` into camera, pause and
   speed changes. `rendering` only translates SDL events to `InputEvents` and executes draw commands, so
@@ -56,10 +60,28 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   assign state fields directly. Keep `Robot::inconsistency()` and `isValidTransition` in step with any
   new state or field, and extend the tests in `tests/robots_test.cpp` (they run in a target linked
   against `core` and `robots` only). Battery and energy are integer units; do not introduce
-  floating-point accumulation into anything that affects simulation outcomes (motion progress is the one
-  exception and is compared with an epsilon).
+  floating-point accumulation into anything that affects simulation outcomes. The motion model (speed,
+  progress along a segment, heading) is the exception: it is closed-form `double` arithmetic, compared
+  with an epsilon (see the motion rules below).
 - The default `RobotSpec` is the idealised robot that the pre-state-machine tests assume. Do not change
-  its defaults; give scenarios their own spec instead.
+  its defaults; give scenarios their own spec instead. Acceleration, deceleration and turn rate are
+  optional (unset = instant) for the same reason.
+- Motion keeps the logical cell and the continuous pose apart. Occupancy, planning and tasks use
+  `Robot::position()` only; `Robot::pose()` is for display. A robot moves only through
+  `turnTowardNext()`/`advance()` (or `drive()`), only into cells it has been granted
+  (`Robot::authority()`), and `Simulation` grants a cell only by claiming it in `World`. Keep the
+  invariant that the world's holds for a robot are exactly its position plus the first `authority()` cells
+  of its path (`MotionAudit` in `tests/movement_test.cpp` checks it on every tick), give claims back with
+  `syncHolds()` whenever a robot's route is cut short, and never write a robot's position or pose from
+  outside `Robot`. A deceleration must stop the robot within one cell (`RobotSpec::validate`); the
+  `wantedAuthority()` bound of three cells depends on it. `brakingViolations()` must stay 0 in every test
+  that does not set out to provoke one.
+- Motion arithmetic must not depend on the step length (`MotionPropertyTest`, `RobotTimestepTest`): add
+  closed-form pieces, not per-step approximations. Floating point is compiled with `-ffp-contract=off` so
+  that results are plain IEEE on every platform; keep it, and compare doubles with a tolerance in tests
+  unless the values are exactly representable.
+- A robot withdrawn mid-move (cancel, disable, flat battery) coasts to a stop and only slows down; do not
+  make it stop dead or speed up. It is `Idle`/`Unavailable` at once but not `isAvailable()` until stopped.
 - The path planner depends only on `core` and `world`; keep it free of robots, tasks, simulation and
   rendering (its tests build into `warehousesim_planning_tests`, linked against `planning` and `testing`
   only). Its results must stay deterministic: ordering keys must be unique and independent of the

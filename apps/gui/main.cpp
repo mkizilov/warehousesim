@@ -1,5 +1,6 @@
 // Graphical runner. The simulation steps on a worker thread with a fixed timestep; this thread
-// reads input, draws frames and paces itself to --fps. Frame rate never affects the simulation.
+// reads input, draws frames and paces itself to --fps. Frame rate never affects the simulation,
+// only how finely the motion between two steps is drawn.
 //
 //   Space pause/resume   [ ] slower/faster   wheel or +/- zoom   drag or arrows/WASD pan
 //   0 fit the whole warehouse   Esc quit
@@ -16,6 +17,7 @@
 #include "warehousesim/rendering/sdl_window.hpp"
 #include "warehousesim/simulation/runner.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
+#include "warehousesim/view/interpolation.hpp"
 #include "warehousesim/view/scene.hpp"
 #include "warehousesim/view/view_controller.hpp"
 
@@ -107,8 +109,12 @@ int main(int argc, char** argv) {
 
       const warehousesim::view::ViewStatus status{controller.paused(), controller.speed(),
                                                   controller.pointer()};
-      window.draw(warehousesim::view::buildScene(runner.warehouse(), runner.snapshot(),
-                                                 controller.camera(), status));
+      // The simulation moves in whole steps; what is drawn is the point between the last two that
+      // real time has reached, so motion is smooth at any frame rate.
+      const warehousesim::simulation::FrameState frame = runner.frame();
+      window.draw(warehousesim::view::buildScene(
+          runner.warehouse(), warehousesim::view::blend(frame.previous, frame.latest, frame.alpha),
+          controller.camera(), status));
       ++frames;
       std::this_thread::sleep_until(frameStart + frameBudget);
     }

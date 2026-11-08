@@ -28,11 +28,16 @@ json toJson(const Snapshot& snapshot) {
     robotsJson.push_back(
         {{"id", robot.id.value},
          {"position", pointToJson(robot.position)},
+         {"pose", {{"x", robot.center().x}, {"y", robot.center().y}}},
          {"heading", core::toString(robot.heading)},
+         {"headingAngle", robot.headingAngle()},
          {"state", robots::toString(robot.state)},
          {"goal", robot.goal == robots::NavigationGoal::None ? json(nullptr)
                                                              : json(robots::toString(robot.goal))},
          {"speed", robot.speed},
+         {"motion", robots::toString(robot.motion)},
+         {"carrying", robot.carrying},
+         {"deliveries", robot.deliveries},
          {"battery", {{"level", robot.batteryLevel}, {"capacity", robot.batteryCapacity}}},
          {"task", optionalIdToJson(robot.task)}});
   }
