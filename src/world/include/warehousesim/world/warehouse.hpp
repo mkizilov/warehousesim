@@ -7,55 +7,56 @@
 #include <vector>
 
 #include "warehousesim/core/point.hpp"
+#include "warehousesim/world/cell_type.hpp"
+#include "warehousesim/world/grid_size.hpp"
 
 namespace warehousesim::world {
 
-enum class CellType : std::uint8_t {
-  Floor,    // '.' walkable aisle
-  Shelf,    // 'S' storage, not walkable; robots pick up from adjacent floor
-  Station,  // 'D' drop-off station, walkable
-  Wall,     // '#' not walkable
-};
-
-[[nodiscard]] char toChar(CellType type) noexcept;
-[[nodiscard]] std::optional<CellType> cellTypeFromChar(char c) noexcept;
-
-// Rectangular grid with the origin at the top-left; x grows right, y grows down.
+// The static warehouse layout: a rectangular grid of CellTypes with the origin at the
+// top-left (x grows east, y grows south). It knows nothing about robots; dynamic occupancy
+// lives in Occupancy and is combined with the layout by World.
 class Warehouse {
  public:
-  // Creates an all-floor warehouse. Throws std::invalid_argument for non-positive sizes.
+  // Creates an all-Free warehouse.
+  explicit Warehouse(GridSize size);
+  // Throws std::invalid_argument for non-positive sizes.
   Warehouse(std::int32_t width, std::int32_t height);
 
-  // Parses one string per row using the characters of CellType. Returns nullopt for an
-  // empty, ragged, or unrecognised layout.
+  // Parses one string per row using the characters of CellType (see toChar). Returns
+  // nullopt for an empty, ragged, or unrecognised layout.
   [[nodiscard]] static std::optional<Warehouse> fromRows(const std::vector<std::string>& rows);
 
-  [[nodiscard]] std::int32_t width() const noexcept { return width_; }
-  [[nodiscard]] std::int32_t height() const noexcept { return height_; }
+  [[nodiscard]] GridSize size() const noexcept { return size_; }
+  [[nodiscard]] std::int32_t width() const noexcept { return size_.width(); }
+  [[nodiscard]] std::int32_t height() const noexcept { return size_.height(); }
 
-  [[nodiscard]] bool inBounds(core::Point p) const noexcept;
+  [[nodiscard]] bool inBounds(core::Point p) const noexcept { return size_.contains(p); }
+  // In bounds and not a wall or shelf.
   [[nodiscard]] bool isWalkable(core::Point p) const noexcept;
+  // In bounds and a wall or shelf. Out-of-bounds points are neither walkable nor obstacles.
+  [[nodiscard]] bool isObstacle(core::Point p) const noexcept;
 
   // Throw std::out_of_range when p is outside the grid.
   [[nodiscard]] CellType at(core::Point p) const;
   void set(core::Point p, CellType type);
 
+  // In-bounds orthogonal neighbours in north, east, south, west order; empty when p itself
+  // is out of bounds.
+  [[nodiscard]] std::vector<core::Point> neighbors(core::Point p) const;
+  // The subset of neighbors() that is walkable.
+  [[nodiscard]] std::vector<core::Point> walkableNeighbors(core::Point p) const;
+
   // Cells of the given type in row-major order.
   [[nodiscard]] std::vector<core::Point> cellsOfType(CellType type) const;
 
-  // Floor cells orthogonally adjacent to a shelf, in row-major order.
+  // Free cells orthogonally adjacent to a shelf, in row-major order.
   [[nodiscard]] std::vector<core::Point> shelfAccessPoints() const;
 
   [[nodiscard]] std::vector<std::string> toRows() const;
 
  private:
-  [[nodiscard]] std::size_t index(core::Point p) const noexcept;
-
-  std::int32_t width_;
-  std::int32_t height_;
+  GridSize size_;
   std::vector<CellType> cells_;
 };
-
-[[nodiscard]] Warehouse makeDemoWarehouse();
 
 }  // namespace warehousesim::world

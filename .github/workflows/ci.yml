@@ -57,8 +57,11 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
-      - name: Headless CLI smoke run
-        run: build/${{ matrix.preset }}/apps/warehousesim_cli --ticks 100 --seed 1 > /dev/null
+      - name: Headless CLI smoke run (every predefined layout)
+        run: |
+          for layout in demo compact fulfilment; do
+            build/${{ matrix.preset }}/apps/warehousesim_cli --layout $layout --ticks 100 --seed 1 > /dev/null
+          done
       - name: GUI smoke run (SDL dummy video driver)
         env:
           SDL_VIDEODRIVER: dummy

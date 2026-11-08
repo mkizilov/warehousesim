@@ -14,7 +14,7 @@
 #include "warehousesim/tasks/assigner.hpp"
 #include "warehousesim/tasks/task.hpp"
 #include "warehousesim/tasks/task_generator.hpp"
-#include "warehousesim/world/warehouse.hpp"
+#include "warehousesim/world/world.hpp"
 
 namespace warehousesim::simulation {
 
@@ -66,24 +66,25 @@ class Simulation {
   void run(core::Tick ticks);
 
   [[nodiscard]] core::Tick tick() const noexcept { return clock_.tick(); }
-  [[nodiscard]] const world::Warehouse& warehouse() const noexcept { return warehouse_; }
+  [[nodiscard]] const world::World& world() const noexcept { return world_; }
+  [[nodiscard]] const world::Warehouse& warehouse() const noexcept { return world_.layout(); }
   [[nodiscard]] const std::vector<robots::Robot>& robots() const noexcept { return robots_; }
   [[nodiscard]] const tasks::TaskBoard& tasks() const noexcept { return tasks_; }
   [[nodiscard]] Snapshot snapshot() const;
 
  private:
-  using Occupied = planning::BlockedSet;
-
   void spawnTask();
   void assignTasks();
   void moveRobots();
   void resolveArrival(robots::Robot& robot);
-  bool resolveBlock(robots::Robot& robot, core::Point cell, Occupied& occupied);
-  bool stepAside(robots::Robot& robot, Occupied& occupied);
-  bool tryRepath(robots::Robot& robot, const Occupied& blocked);
+  bool resolveBlock(robots::Robot& robot, core::Point cell);
+  bool stepAside(robots::Robot& robot);
+  [[nodiscard]] planning::BlockedSet occupiedCells() const;
+  bool tryRepath(robots::Robot& robot, const planning::BlockedSet& blocked);
   void failTask(robots::Robot& robot);
 
-  world::Warehouse warehouse_;
+  // Kept in lock-step with the robots' own positions: every move goes through world_.
+  world::World world_;
   std::vector<robots::Robot> robots_;
   tasks::TaskBoard tasks_;
   std::unique_ptr<planning::PathPlanner> planner_;

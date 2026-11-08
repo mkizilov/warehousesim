@@ -11,6 +11,7 @@
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/serialization.hpp"
+#include "warehousesim/world/layouts.hpp"
 #include "warehousesim/world/warehouse.hpp"
 
 namespace {
@@ -21,6 +22,7 @@ using warehousesim::core::RobotId;
 using warehousesim::core::TaskId;
 using warehousesim::robots::RobotStatus;
 using warehousesim::simulation::makeDemoSimulation;
+using warehousesim::simulation::makeLayoutSimulation;
 using warehousesim::simulation::Simulation;
 using warehousesim::simulation::SimulationConfig;
 using warehousesim::simulation::toJson;
@@ -39,6 +41,7 @@ Warehouse layout(const std::vector<std::string>& rows) {
 
 TEST(SimulationTest, RejectsInvalidRobotStarts) {
   EXPECT_THROW(Simulation(layout({".S."}), {P(1, 0)}), std::invalid_argument);
+  EXPECT_THROW(Simulation(layout({".#."}), {P(1, 0)}), std::invalid_argument);
   EXPECT_THROW(Simulation(layout({"..."}), {P(5, 0)}), std::invalid_argument);
   EXPECT_THROW(Simulation(layout({"..."}), {P(0, 0), P(0, 0)}), std::invalid_argument);
 }
@@ -173,6 +176,64 @@ TEST(SimulationTest, DifferentSeedsProduceDifferentRuns) {
   a.run(100);
   b.run(100);
   EXPECT_FALSE(a.snapshot() == b.snapshot());
+}
+
+TEST(SimulationTest, WorldOccupancyMatchesRobotPositionsEveryTick) {
+  Simulation sim = makeDemoSimulation(11);
+  for (int i = 0; i < 400; ++i) {
+    sim.step();
+    const auto& occupancy = sim.world().occupancy();
+    ASSERT_EQ(occupancy.robotCount(), sim.robots().size());
+    for (const auto& robot : sim.robots()) {
+      ASSERT_EQ(occupancy.positionOf(robot.id()), robot.position());
+      ASSERT_EQ(occupancy.occupantAt(robot.position()), robot.id());
+      ASSERT_TRUE(sim.world().isWalkable(robot.position()));
+    }
+  }
+}
+
+TEST(SimulationTest, SpawnedTasksUseExplicitPickupCellsWhenTheLayoutHasThem) {
+  SimulationConfig config;
+  config.taskSpawnInterval = 1;
+  Simulation sim(layout({"S.....D", "..P...."}), {P(3, 1)}, config);
+  sim.run(40);
+  ASSERT_FALSE(sim.tasks().all().empty());
+  for (const auto& task : sim.tasks().all()) {
+    EXPECT_EQ(task.pickup, P(2, 1));  // the Pickup cell, not an aisle beside the shelf
+    EXPECT_EQ(task.dropoff, P(6, 0));
+  }
+  EXPECT_GT(sim.snapshot().completedTasks, 0U);
+}
+
+TEST(SimulationTest, PredefinedLayoutsRunWithoutFailuresOrOverlap) {
+  for (const auto& info : warehousesim::world::predefinedLayouts()) {
+    auto sim = makeLayoutSimulation(info.name, 3);
+    ASSERT_TRUE(sim.has_value());
+    for (int i = 0; i < 400; ++i) {
+      sim->step();
+      std::set<Point> positions;
+      for (const auto& robot : sim->robots()) {
+        ASSERT_TRUE(sim->world().isWalkable(robot.position()));
+        positions.insert(robot.position());
+      }
+      ASSERT_EQ(positions.size(), sim->robots().size());
+    }
+    EXPECT_EQ(sim->snapshot().failedTasks, 0U);
+    EXPECT_GT(sim->snapshot().completedTasks, 5U);
+  }
+}
+
+TEST(SimulationTest, LayoutScenarioLookup) {
+  EXPECT_FALSE(makeLayoutSimulation("nonexistent", 1).has_value());
+  auto named = makeLayoutSimulation("demo", 4);
+  ASSERT_TRUE(named.has_value());
+  Simulation direct = makeDemoSimulation(4);
+  named->run(50);
+  direct.run(50);
+  EXPECT_TRUE(named->snapshot() == direct.snapshot());
+  auto compact = makeLayoutSimulation("compact", 1);
+  ASSERT_TRUE(compact.has_value());
+  EXPECT_EQ(compact->robots().size(), 2U);  // one robot per charging station, up to four
 }
 
 TEST(SimulationTest, SpawningDisabledWithoutShelvesOrStations) {

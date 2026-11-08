@@ -26,7 +26,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | Module       | Responsibility                                        | May depend on                        |
 |--------------|-------------------------------------------------------|--------------------------------------|
 | `core`       | points, ids, clock, deterministic RNG                 | std only                             |
-| `world`      | warehouse grid and cell types                         | core                                 |
+| `world`      | grid model: cell types, static layout, robot occupancy, predefined layouts | core            |
 | `robots`     | robot state and movement along a path                 | core                                 |
 | `planning`   | `PathPlanner` interface, A*                           | core, world                          |
 | `tasks`      | task lifecycle, assignment, task generation           | core, robots                         |
@@ -43,6 +43,12 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   library, CLI and all tests except `viewport_test.cpp` must build and run with no display and no SDL.
 - Depend on interfaces at module seams (`PathPlanner`, `TaskAssigner`) and inject implementations through
   constructors. No global or singleton state.
+- Keep static layout (`Warehouse`) and dynamic robot occupancy (`Occupancy`) separate; mutate them
+  together only through `world::World`, which keeps robots off obstacles and one per cell. New world code
+  must not depend on simulation, JSON or SDL: `tests/world_*`, `layouts`, `occupancy`, `warehouse` and `core`
+  tests are built into `warehousesim_world_tests`, linked against `core` and `world` only.
+- New predefined layouts go in `src/world/layouts.cpp` and must pass `tests/layouts_test.cpp` (one
+  connected walkable region, a dropoff, and a pickup source).
 - Keep rendering logic that can be pure (e.g. `Viewport`) free of SDL types so it can be unit-tested.
 
 ### Deterministic tests and behaviour
@@ -88,6 +94,7 @@ cmake --preset default                  # Debug + SDL3 GUI + tests, warnings as 
 cmake --build --preset default
 ctest --preset default
 build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
+build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # GUI smoke test, no window
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan   # ASan + UBSan
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan   # ThreadSanitizer

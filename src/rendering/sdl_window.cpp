@@ -23,14 +23,18 @@ constexpr Color kPauseIcon{255, 255, 255};
 
 Color cellColor(world::CellType type) {
   switch (type) {
-    case world::CellType::Floor:
+    case world::CellType::Free:
       return {44, 48, 58};
-    case world::CellType::Shelf:
-      return {140, 100, 60};
-    case world::CellType::Station:
-      return {60, 160, 90};
     case world::CellType::Wall:
       return {100, 100, 110};
+    case world::CellType::Shelf:
+      return {140, 100, 60};
+    case world::CellType::Pickup:
+      return {170, 140, 40};
+    case world::CellType::Dropoff:
+      return {60, 160, 90};
+    case world::CellType::Charging:
+      return {130, 90, 190};
   }
   return kBackground;
 }

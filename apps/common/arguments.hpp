@@ -3,8 +3,11 @@
 #include <charconv>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
+
+#include "warehousesim/world/layouts.hpp"
 
 namespace warehousesim::apps {
 
@@ -38,6 +41,31 @@ inline bool readUnsignedOption(int argc, char** argv, int& index, std::string_vi
   out = *parsed;
   ++index;
   return true;
+}
+
+// Same contract as readUnsignedOption, for options taking a string value.
+inline bool readStringOption(int argc, char** argv, int& index, std::string_view name,
+                             std::string& out, bool& failed) {
+  if (std::string_view(argv[index]) != name) {
+    return false;
+  }
+  if (index + 1 >= argc) {
+    failed = true;
+    return false;
+  }
+  out = argv[index + 1];
+  ++index;
+  return true;
+}
+
+// "demo, compact, fulfilment" - for usage and error messages.
+[[nodiscard]] inline std::string layoutNames() {
+  std::string names;
+  for (const world::LayoutInfo& layout : world::predefinedLayouts()) {
+    names += names.empty() ? "" : ", ";
+    names += layout.name;
+  }
+  return names;
 }
 
 }  // namespace warehousesim::apps

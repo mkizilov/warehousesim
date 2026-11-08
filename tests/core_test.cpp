@@ -41,6 +41,33 @@ TEST(PointTest, HashDistinguishesSwappedAndNegativeCoordinates) {
   EXPECT_TRUE(points.contains(P(-1, 2)));
 }
 
+TEST(DirectionTest, OffsetsMatchTheCardinalDirectionTable) {
+  using warehousesim::core::Direction;
+  using warehousesim::core::kAllDirections;
+  using warehousesim::core::kCardinalDirections;
+  using warehousesim::core::offsetOf;
+  EXPECT_EQ(offsetOf(Direction::North), P(0, -1));
+  EXPECT_EQ(offsetOf(Direction::East), P(1, 0));
+  EXPECT_EQ(offsetOf(Direction::South), P(0, 1));
+  EXPECT_EQ(offsetOf(Direction::West), P(-1, 0));
+  for (std::size_t i = 0; i < kAllDirections.size(); ++i) {
+    EXPECT_EQ(offsetOf(kAllDirections[i]), kCardinalDirections[i]);
+  }
+}
+
+TEST(DirectionTest, DirectionBetweenFindsOnlyOrthogonalNeighbours) {
+  using warehousesim::core::Direction;
+  using warehousesim::core::directionBetween;
+  EXPECT_EQ(directionBetween(P(2, 2), P(2, 1)), Direction::North);
+  EXPECT_EQ(directionBetween(P(2, 2), P(3, 2)), Direction::East);
+  EXPECT_EQ(directionBetween(P(2, 2), P(2, 3)), Direction::South);
+  EXPECT_EQ(directionBetween(P(2, 2), P(1, 2)), Direction::West);
+  EXPECT_FALSE(directionBetween(P(2, 2), P(2, 2)).has_value());
+  EXPECT_FALSE(directionBetween(P(2, 2), P(3, 3)).has_value());
+  EXPECT_FALSE(directionBetween(P(2, 2), P(4, 2)).has_value());
+  EXPECT_FALSE(directionBetween(P(0, 0), P(-1, 1)).has_value());
+}
+
 TEST(IdsTest, DefaultIsInvalidAndDistinctTypesCompareByValue) {
   EXPECT_FALSE(RobotId{}.valid());
   EXPECT_TRUE(TaskId{3}.valid());

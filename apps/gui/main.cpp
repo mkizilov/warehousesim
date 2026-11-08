@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <string>
 #include <thread>
+#include <utility>
 
 #include "arguments.hpp"
 #include "warehousesim/rendering/sdl_window.hpp"
@@ -14,8 +16,10 @@
 namespace {
 
 void printUsage(std::ostream& out) {
-  out << "usage: warehousesim_gui [--seed N] [--tick-ms N] [--frames N]\n"
-         "  --frames N  exit after N rendered frames (0 = run until closed)\n";
+  out << "usage: warehousesim_gui [--seed N] [--tick-ms N] [--frames N] [--layout NAME]\n"
+         "  --frames N  exit after N rendered frames (0 = run until closed)\n"
+         "  layouts: "
+      << warehousesim::apps::layoutNames() << " (default: demo)\n";
 }
 
 }  // namespace
@@ -24,11 +28,13 @@ int main(int argc, char** argv) {
   std::uint64_t seed = 1;
   std::uint64_t tickMs = 100;
   std::uint64_t maxFrames = 0;
+  std::string layout = "demo";
   bool failed = false;
   for (int i = 1; i < argc && !failed; ++i) {
     if (warehousesim::apps::readUnsignedOption(argc, argv, i, "--seed", seed, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--tick-ms", tickMs, failed) ||
-        warehousesim::apps::readUnsignedOption(argc, argv, i, "--frames", maxFrames, failed)) {
+        warehousesim::apps::readUnsignedOption(argc, argv, i, "--frames", maxFrames, failed) ||
+        warehousesim::apps::readStringOption(argc, argv, i, "--layout", layout, failed)) {
       continue;
     }
     failed = true;
@@ -39,8 +45,13 @@ int main(int argc, char** argv) {
   }
 
   try {
+    auto simulation = warehousesim::simulation::makeLayoutSimulation(layout, seed);
+    if (!simulation) {
+      printUsage(std::cerr);
+      return 2;
+    }
     warehousesim::simulation::SimulationRunner runner(
-        warehousesim::simulation::makeDemoSimulation(seed),
+        std::move(*simulation),
         std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)));
     warehousesim::rendering::SdlWindow window("WarehouseSim", 960, 600);
     runner.start();

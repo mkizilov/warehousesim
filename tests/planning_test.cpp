@@ -7,6 +7,7 @@
 
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/planning/astar_planner.hpp"
+#include "warehousesim/world/layouts.hpp"
 #include "warehousesim/world/warehouse.hpp"
 
 namespace {
@@ -61,12 +62,32 @@ TEST(AStarTest, RoutesAroundObstacleWithShortestLength) {
   expectValidPath(w, P(0, 1), *path);
 }
 
-TEST(AStarTest, ShelvesAndWallsBlockButStationsDoNot) {
+TEST(AStarTest, ShelvesAndWallsBlockButSpecialCellsDoNot) {
   const Warehouse w = layout({".SD.", ".#.."});
   const auto path = AStarPlanner{}.findPath(w, P(0, 0), P(3, 0), {});
   EXPECT_FALSE(path.has_value());  // shelf and wall seal the only connection
-  const auto toStation = AStarPlanner{}.findPath(w, P(3, 1), P(2, 0), {});
-  ASSERT_TRUE(toStation.has_value());
+  const auto toDropoff = AStarPlanner{}.findPath(w, P(3, 1), P(2, 0), {});
+  ASSERT_TRUE(toDropoff.has_value());
+
+  const Warehouse special = layout({"PDC"});
+  const auto across = AStarPlanner{}.findPath(special, P(0, 0), P(2, 0), {});
+  ASSERT_TRUE(across.has_value());
+  EXPECT_EQ(across->size(), 2U);  // pickup, dropoff and charging cells can all be crossed
+}
+
+TEST(AStarTest, FindsPathsOnEveryPredefinedLayout) {
+  for (const auto& info : warehousesim::world::predefinedLayouts()) {
+    const Warehouse w = info.make();
+    const auto stations = w.cellsOfType(warehousesim::world::CellType::Dropoff);
+    const auto origins = w.cellsOfType(warehousesim::world::CellType::Free);
+    ASSERT_FALSE(stations.empty());
+    ASSERT_FALSE(origins.empty());
+    for (const Point station : stations) {
+      const auto path = AStarPlanner{}.findPath(w, origins.front(), station, {});
+      ASSERT_TRUE(path.has_value());
+      expectValidPath(w, origins.front(), *path);
+    }
+  }
 }
 
 TEST(AStarTest, UnreachableOrInvalidGoalReturnsNullopt) {
