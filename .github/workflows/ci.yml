@@ -46,8 +46,8 @@ jobs:
         include:
           - { name: "ubuntu clang, debug + GUI", os: ubuntu-24.04, preset: default, cc: clang, cxx: clang++, experimental: false }
           - { name: "ubuntu clang, release + GUI", os: ubuntu-24.04, preset: release, cc: clang, cxx: clang++, experimental: false }
-          - { name: "macos clang, debug + GUI", os: macos-14, preset: default, cc: clang, cxx: clang++, experimental: false }
-          - { name: "macos clang, release + GUI", os: macos-14, preset: release, cc: clang, cxx: clang++, experimental: false }
+          - { name: "macos clang, debug + GUI", os: macos-26, preset: default, cc: clang, cxx: clang++, experimental: false }
+          - { name: "macos clang, release + GUI", os: macos-26, preset: release, cc: clang, cxx: clang++, experimental: false }
           - { name: "ubuntu gcc, headless (experimental)", os: ubuntu-24.04, preset: headless, cc: gcc-13, cxx: g++-13, experimental: true }
           - { name: "windows msvc, headless (experimental)", os: windows-2022, preset: headless, cc: cl, cxx: cl, experimental: true }
     env:
