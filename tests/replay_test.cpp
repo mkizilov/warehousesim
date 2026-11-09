@@ -200,7 +200,7 @@ TEST(ReplayTest, AReplayCutShortAtACommandsTickAppliesTheCommandsOfThatTick) {
   // step that would begin at that tick has not been taken.
   std::vector<TaskEvent> expected;
   for (const TaskEvent& event : recording.taskEvents) {
-    if (event.tick < tick || (event.tick == tick && event.source == EventSource::Command)) {
+    if (event.tick < tick || (event.tick == tick && event.source == EventSource::FromCommand)) {
       expected.push_back(event);
     }
   }

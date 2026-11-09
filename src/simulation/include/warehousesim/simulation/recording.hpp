@@ -50,8 +50,8 @@ struct RecordedCommand {
 };
 
 enum class EventSource : std::uint8_t {
-  Command,  // a consequence of a command, seen right after it was applied
-  Engine,   // of a step: the task generator made one
+  FromCommand,  // a consequence of a command, seen right after it was applied
+  Engine,       // of a step: the task generator made one
 };
 
 [[nodiscard]] const char* toString(EventSource source) noexcept;

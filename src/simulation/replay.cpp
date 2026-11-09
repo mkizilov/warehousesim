@@ -172,7 +172,7 @@ class Replay {
       const TaskEvent& next = recorded[made.size()];
       const core::Tick now = simulation_->tick();
       const bool due = next.tick < now || (commandsOfThisTickAreDone && next.tick == now &&
-                                           next.source == EventSource::Command);
+                                           next.source == EventSource::FromCommand);
       if (due) {
         diverge(next.tick,
                 "the recording has " + describe(next) + ", but the replay made nothing then");

@@ -123,7 +123,7 @@ std::optional<RecordingProblem> validateCheckpoints(const Recording& recording) 
 
 const char* toString(EventSource source) noexcept {
   switch (source) {
-    case EventSource::Command:
+    case EventSource::FromCommand:
       return "command";
     case EventSource::Engine:
       return "engine";
@@ -205,7 +205,7 @@ void RunJournal::commandApplied(const Simulation& simulation, const Command& com
                            " and the simulation at tick " + std::to_string(simulation.tick()));
   }
   commands_.push_back({simulation.tick(), command, accepted});
-  noteTasks(simulation, EventSource::Command, simulation.tick());
+  noteTasks(simulation, EventSource::FromCommand, simulation.tick());
 }
 
 void RunJournal::stepTaken(const Simulation& simulation) {

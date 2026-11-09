@@ -267,7 +267,7 @@ TEST(RecorderTest, ATaskMadeByACommandIsACommandEventAndComesBeforeTheStepsAtTha
     }
   }
   ASSERT_EQ(atTen.size(), 2U);
-  EXPECT_EQ(atTen[0].source, EventSource::Command);
+  EXPECT_EQ(atTen[0].source, EventSource::FromCommand);
   EXPECT_EQ(atTen[0].task, *made.task);
   EXPECT_EQ(atTen[0].pickup, P(3, 3));
   EXPECT_EQ(atTen[0].priority, TaskPriority::High);
@@ -286,7 +286,7 @@ TEST(RecorderTest, ACancellationIsAnEventAtTheTickOfTheCommand) {
   ASSERT_EQ(cancelled.size(), 1U);
   EXPECT_EQ(cancelled[0].tick, 3U);
   EXPECT_EQ(cancelled[0].task, *made.task);
-  EXPECT_EQ(cancelled[0].source, EventSource::Command);
+  EXPECT_EQ(cancelled[0].source, EventSource::FromCommand);
 }
 
 TEST(RecorderTest, ACancellationThatFollowsFromAWallIsReportedToo) {
@@ -300,7 +300,7 @@ TEST(RecorderTest, ACancellationThatFollowsFromAWallIsReportedToo) {
   ASSERT_EQ(cancelled.size(), 1U);
   EXPECT_EQ(cancelled[0].task, *onTheCell.task);
   EXPECT_EQ(cancelled[0].tick, 2U);
-  EXPECT_EQ(cancelled[0].source, EventSource::Command);
+  EXPECT_EQ(cancelled[0].source, EventSource::FromCommand);
   EXPECT_NE(cancelled[0].task, *elsewhere.task);
 }
 
@@ -396,7 +396,7 @@ TEST(ValidateTest, EventsMustBeInOrderNumberedFromOneAndCancelOnlyWhatExists) {
 
   Recording stepBeforeCommand = valid();  // at one tick, a command's events come first
   stepBeforeCommand.taskEvents[0].source = EventSource::Engine;
-  stepBeforeCommand.taskEvents[1].source = EventSource::Command;
+  stepBeforeCommand.taskEvents[1].source = EventSource::FromCommand;
   stepBeforeCommand.taskEvents[1].tick = 0;
   EXPECT_NE(problemOf(stepBeforeCommand).find("out of order"), std::string::npos)
       << problemOf(stepBeforeCommand);

@@ -590,7 +590,7 @@ TaskEvent readTaskEvent(const Json& value, const std::string& path) {
   if (source != "command" && source != "engine") {
     reject(object.at("source"), "must be command or engine, not \"" + source.substr(0, 40) + "\"");
   }
-  event.source = source == "command" ? EventSource::Command : EventSource::Engine;
+  event.source = source == "command" ? EventSource::FromCommand : EventSource::Engine;
   if (created) {
     event.pickup = asPoint(object.need("pickup"), object.at("pickup"));
     event.dropoff = asPoint(object.need("dropoff"), object.at("dropoff"));

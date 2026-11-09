@@ -61,7 +61,7 @@ Recording small() {
   created.tick = 2;
   created.kind = TaskEventKind::Created;
   created.task = TaskId{1};
-  created.source = EventSource::Command;
+  created.source = EventSource::FromCommand;
   created.pickup = P(0, 0);
   created.dropoff = P(2, 0);
   created.priority = TaskPriority::High;
@@ -69,7 +69,7 @@ Recording small() {
   cancelled.tick = 5;
   cancelled.kind = TaskEventKind::Cancelled;
   cancelled.task = TaskId{1};
-  cancelled.source = EventSource::Command;
+  cancelled.source = EventSource::FromCommand;
   recording.taskEvents = {created, cancelled};
   recording.checkpoints = {{0, 0x0000000000000001ULL}, {10, 0x00000000000000ffULL}};
   recording.end = Checkpoint{20, 0xabcdef0123456789ULL};
