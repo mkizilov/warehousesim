@@ -1,20 +1,31 @@
-# WarehouseSim: project boundaries and working agreement
+# WarehouseSim: repository boundaries and working agreement
 
-- Work only in `/Users/mk-rune/test_projects/07-warehousesim`. This is one of fourteen independent repositories.
-- Do not read, modify, clean up, or run commands in sibling repositories or the user's configuration.
-- Work autonomously: choose sensible defaults and document assumptions; do not ask questions or delegate.
-- Never install anything globally or use sudo, Homebrew, launchd, host credentials, or host Docker sockets.
-- Dependencies, toolchains, caches, browser binaries, SDKs, temporary files and test data stay in this repository. Preserve the supplied project-local environment. Python packages go in `.venv`.
-- `.agent-local/` is ignored, project-local build/runtime state. `.opencode/` is managed orchestration configuration; do not change or remove it or bypass the sandbox.
-- Use existing system tools read-only, or install pinned tools under this repository. Do not change shell profiles, user settings, Keychain, or global Git settings.
-- Bind test servers to loopback; use ports 21600–21699. Limit build/test workers to two unless a required benchmark explicitly needs more.
-- Docker-dependent integration tests must remain reproducible but be reported as unverified here if they require access outside this repository. Do not bypass this boundary.
-- Do not touch attached hardware, enroll services, flash firmware, install agents, or alter OS settings. Supply manual checklists for such steps.
-- Implement only the current numbered prompt, preserving prior behavior. Run appropriate checks, fix failures, and report genuine limitations without fabricating test or benchmark results.
-- Before finishing every numbered turn: stop its servers/watchers, remove scratch outputs, update relevant documentation, and make a local conventional-commit Git commit. Do not push.
-- End each turn with a short summary of changes, checks actually run, remaining limitations, and commit hash. The orchestrator will provide the next prompt only after this turn ends.
+These rules apply to everyone who changes this repository, people and tools alike.
 
-Extend this file with the project's language-specific architecture and verification commands while retaining these boundaries.
+## Boundaries
+
+- Work inside this repository. Do not read or change other projects, or the user's own configuration
+  (shell profiles, editor and global Git settings, credentials, the keychain).
+- Never install anything globally, and never use `sudo` or a system package manager to do it. Dependencies,
+  toolchains, caches, temporary files and test data stay in the repository: Python packages in `.venv/`, other
+  pinned tools under `.tools/`, build trees under `build/`, scratch files in a git-ignored place. Use system
+  tools read-only, or install pinned versions locally.
+- The simulator opens no network connections and nothing in the test suite may need the network. If a test
+  ever needs a server, bind it to loopback only. Fetching the pinned dependencies when configuring is the one
+  use of the network.
+- Use at most two parallel build or test workers unless a benchmark explicitly needs more, and say so when it
+  does.
+- Docker-based tests, if they are ever added, must stay reproducible and be reported as unverified wherever
+  Docker cannot be used; do not work round an access limit to run them.
+- Never fabricate a test or benchmark result, and never weaken or delete a test to make it pass. Report a
+  limitation that is real, with the evidence for it.
+- Change what the task asks and keep prior behaviour, unless changing it is the point (and then say so in the
+  commit and the documents).
+- Commit with conventional messages (`feat:`, `fix:`, `docs:`, `test:`, `chore:`), one concern per commit, and do
+  not rewrite history that others may have. Do not push unless asked.
+- Before finishing: stop any server or watcher you started, remove scratch outputs and build trees you made only
+  for a check, update the documents the change touches (README, `docs/`, this file), and report which checks you
+  ran and which you could not.
 
 ## WarehouseSim (C++20) architecture and engineering rules
 
@@ -313,39 +324,49 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 
 ### Verification after every change
 
-Run from the repository root (dependencies are fetched by CMake at pinned versions or found on the system;
-keep all build trees under `build/`, which is git-ignored):
+Run from the repository root. Dependencies are fetched by CMake at pinned versions (or found on the system);
+keep all build trees under `build/`, which is git-ignored. The pinned tools (`cmake`, `ninja`, `clang-format`,
+`clang-tidy`) live in the project-local `.venv`; `docs/developer-guide.md` has the install line. Use at most two
+build or test workers (`-j2`).
 
 ```sh
-cmake --preset default                  # Debug + SDL3 GUI + tests, warnings as errors
-cmake --build --preset default
-ctest --preset default
-build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
-build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
-SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # fleet interface smoke test, no window
-build/release/bench/warehousesim_fleet_bench                              # the baseline table of the README
-build/release/bench/warehousesim_scaling_bench                            # a step with and without planning threads (README)
-build/default/apps/warehousesim_cli --layout large --robots 100 --ticks 300 --threads 2   # 100 robots, 2 planning threads
-build/default/apps/warehousesim_cli --layout compact --ticks 500 --metrics --metrics-csv build/m   # dashboard + CSV
-build/default/apps/warehousesim_cli --layout compact --ticks 500 --seed 2 --record build/run.json   # record ...
-build/default/apps/warehousesim_cli --replay build/run.json                                         # ... and check the replay
-SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-map.json --layout compact --frames 30
-# (ctest also runs the headless CLI on every layout and on a map file, checks that equal seeds give
-# equal output, and that invalid maps are refused)
-cmake --preset asan && cmake --build --preset asan && ctest --preset asan   # ASan + UBSan
-cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan   # ThreadSanitizer
-cmake --preset tidy && cmake --build --preset tidy                          # clang-tidy
-find src apps tests bench testing \( -name '*.cpp' -o -name '*.hpp' \) | xargs clang-format --dry-run --Werror
-build/release/bench/warehousesim_regression_bench                          # the performance gate
+export PATH="$PWD/.venv/bin:$PATH"
+cmake --preset default && cmake --build --preset default -j2 && ctest --preset default -j2   # Debug, GUI, tests
+build/default/apps/warehousesim_cli --ticks 200 --seed 1                  # headless smoke test
+build/default/apps/warehousesim_cli --layout compact --ticks 200          # also: demo, fulfilment, large
 build/default/apps/warehousesim_cli --map examples/cross-dock.json --robots 12 --ticks 1500 --audit
-cmake --build --preset package                                              # the release archive
+build/default/apps/warehousesim_cli --layout large --robots 100 --ticks 300 --threads 2
+build/default/apps/warehousesim_cli --layout compact --ticks 500 --metrics --metrics-csv build/m
+build/default/apps/warehousesim_cli --layout compact --ticks 500 --seed 2 --record build/run.json
+build/default/apps/warehousesim_cli --replay build/run.json               # ... and check the replay
+SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30     # fleet interface, no window
+SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-map.json --layout compact --frames 30
+# ctest also runs the CLI on every layout and example map, checks that equal seeds give equal output, that
+# invalid maps are refused, and that every example is audited, recorded and replayed.
+
+cmake --preset release && cmake --build --preset release -j2 && ctest --preset release -j2
+build/release/bench/warehousesim_regression_bench                         # the performance gate
+build/release/bench/warehousesim_fleet_bench                              # the baseline table of the README
+build/release/bench/warehousesim_scaling_bench                            # a step with and without planning threads
+python3 scripts/campaign.py build/release/apps/warehousesim_cli           # layouts x fleets x loads x seeds, audited
+cmake --build --preset package                                            # the release archive
+
+cmake --preset asan && cmake --build --preset asan -j2 && ctest --preset asan -j2   # ASan + UBSan + float checks
+cmake --preset tsan && cmake --build --preset tsan -j2 && ctest --preset tsan -j2   # ThreadSanitizer
+cmake --preset tidy && cmake --build --preset tidy -j2                              # clang-tidy
+find src apps tests bench testing \( -name '*.cpp' -o -name '*.hpp' \) | xargs clang-format --dry-run --Werror
 ```
 
 Use `--preset headless` when SDL3 cannot be built or fetched. Report any check you could not run, and why,
-rather than skipping it silently. CI (`.github/workflows/ci.yml`) runs the same checks.
+rather than skipping it silently.
+
+`docs/verification.md` says what has been checked, on which platform and at which commit, and what has not
+(implemented, verified, partial, unverified). Keep it true: when a check is run for the first time, or a claim
+stops being true, change it in the same commit. CI (`.github/workflows/`) is configured to run these checks but
+has not yet run on a hosted runner. `ROADMAP.md` is the prioritised list of what remains.
 
 ### Dependencies
 
 Pinned in `cmake/WarehouseSimDependencies.cmake` (found via `find_package` first, otherwise fetched):
-nlohmann_json 3.12.0, GoogleTest 1.17.0, SDL3 3.2.0. Install tools only inside this repository (`.tools/`,
-`.venv/`); never globally. Do not add a dependency for a few lines of code.
+nlohmann_json 3.12.0, GoogleTest 1.17.0, SDL3 3.2.0. Install tools only inside this repository (`.venv/` for
+Python packages, `.tools/` for anything else); never globally. Do not add a dependency for a few lines of code.

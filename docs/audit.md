@@ -56,9 +56,9 @@ counter of layouts, which only has to be unique.
 
 **Checks.**
 
-- ThreadSanitizer: the whole suite (1 531 tests) clean, 0 reports. This includes the pool tests, which an
-  earlier turn showed to catch deliberately broken pools (a producer never woken, workers that drop
-  tasks, two threads joining one worker).
+- ThreadSanitizer: the whole suite (1 531 tests) clean, 0 reports. This includes the pool tests, which were
+  shown, when they were written, to catch deliberately broken pools (a producer never woken, workers that
+  drop tasks, two threads joining one worker).
 - The thread count changes no state, checksum or recording: `PlanningThreadsTest`, the replays of the random
   command runs on 0 and on 2 threads, the example tests, the scaling benchmark's self-check and the CLI run
   with `--threads 2` against `--threads 0` and its own replay.

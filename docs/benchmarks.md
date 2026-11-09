@@ -20,7 +20,7 @@ warehouse performs.
 | Compiler | Apple clang 21.0.0.21000401, libc++ |
 | Build | `cmake --preset release`: `-O3 -DNDEBUG -flto=thin -ffp-contract=off`, CMake 3.31.6, Ninja |
 | Workers | at most two build or test workers; at most two planning threads besides the stepping thread |
-| Quietness | **not quiet**: the 1-minute load average read 3.6 to 4.5 throughout, from processes that are not this project's (the sandbox does not allow listing them). Repeated runs of the same scenario agreed within about 3 %; read the wall-clock figures as that good and no better |
+| Quietness | **not quiet**: the 1-minute load average read 3.6 to 4.5 throughout, from processes that are not this project's (they could not be listed from here). Repeated runs of the same scenario agreed within about 3 %; read the wall-clock figures as that good and no better |
 
 Link-time optimisation was compared with a build without it (the same sources, `-O3`), alternating the
 two builds twice, on the five regression scenarios: the build with LTO was 4 to 5 % faster on the two
@@ -78,7 +78,7 @@ On the raw batches of independent path questions they do help:
 Preparing a frame for drawing (snapshot, interpolation and the draw list, not the SDL calls) takes under
 0.6 % of a 60 fps frame at 100 to 256 robots. Executing the draw commands in SDL is not measured.
 
-These agree with the README's earlier figures, which were hand-built before CMake could be installed: its
+These agree with the README's figures, which were measured with hand-built binaries: its
 scaling table gave 0.290, 0.372 and 0.770 ms a step for 100, 128 and 256 robots on one thread, against
 0.286, 0.367 and 0.768 here. Its table of "single-thread speed" with the engine's fixed planning limits
 (0.233, 0.297 and 0.492 ms) is a different measurement: the shipped `large` scenario scales the limits with
@@ -88,7 +88,8 @@ the hall, as the README's second table (0.291 ms for 100 robots) and every figur
 
 `warehousesim_fleet_bench`: 3 layouts x 4 fleet sizes x 3 seeds, 3 000 ticks each, a task every 5 ticks.
 No robot overlapped or swapped places, every task was accounted for and the first case reproduced exactly.
-The output is byte-identical to the one in the README's baseline. Utilisation is 95 to 98 % everywhere
+Every row is the same, figure for figure, as the README's baseline table (compared row by row on a fresh
+clone), as are the 8 rows of its light-load table (`--spawn 25 --layouts demo,fulfilment`). Utilisation is 95 to 98 % everywhere
 (the load saturates these fleets), which is why throughput is the figure to read:
 
 | layout | robots | tasks / h | tasks / robot-h | waiting % | conflicts / h | replans / h |
@@ -202,8 +203,10 @@ Light load, a task every 25 ticks (80 tasks offered, so 78 or more done is "ever
 - **Not a measure of the model.** The tables are one model, 2 000 ticks, 3 seeds. Differences of a few tasks
   between neighbouring cells are within seed-to-seed spread (the demo hall varies by about +-3 tasks per 500
   ticks) and mean nothing.
-- **Why it was not seen earlier.** The fleet benchmark and the scenario tests used up to 8 robots. The
-  campaign is the first thing to run 16 and 64 on the small halls.
+- **Why it was not called out earlier.** The fleet benchmark and the scenario tests used up to 8 robots. The
+  effect may already show in a small form in the README's light-load table (`demo`: 142.8 tasks an hour with 4
+  robots, 129.6 with 8, though a difference that small can be seed noise), and the campaign is the first thing
+  to run 16 and 64 robots on the small halls.
 
 ## Reproducing
 

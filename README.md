@@ -39,8 +39,32 @@ core ← robots ──────────┴← tasks ┐
 | [docs/developer-guide.md](docs/developer-guide.md) | toolchain, presets, the test tiers, sanitizers, static analysis, benchmarks, CI, releasing |
 | [docs/audit.md](docs/audit.md) | the audit of memory ownership, concurrency, event ordering, collision safety and numerical stability |
 | [docs/benchmarks.md](docs/benchmarks.md) | the final benchmark results and the scenario campaign, with the machine and build they came from |
+| [docs/verification.md](docs/verification.md) | what is implemented, verified, partial and unverified, with the checks and results behind each, and a manual checklist for a real window |
+| [ROADMAP.md](ROADMAP.md) | the prioritised next steps, with scope, dependencies, acceptance criteria and estimates |
 | [examples/README.md](examples/README.md) | six example warehouses and what each shows |
 | [CHANGELOG.md](CHANGELOG.md) | what each release added |
+
+## Status
+
+Version 1.0.0. Everything below was checked on **one platform**: macOS 27.2, Apple M4 (arm64), Apple clang 21. The
+full table, with the checks behind each row and a checklist for a real window, is
+[docs/verification.md](docs/verification.md).
+
+- **Verified** (checks run, on that platform, and passing): the engine and its modules; collision safety (no
+  overlap, swap or doubly held cell in 666 333 audited states); planning, tasks, metrics, the map file and the
+  editing model, recording and replay, planning threads, the command line, the benchmarks and the regression
+  gate, the release archive. 1 538 tests pass in the Release build and 1 533 under AddressSanitizer + UBSan
+  and under ThreadSanitizer (0 reports); clang-tidy (0 findings) and clang-format are clean.
+- **Partial** (works, but a requirement is only partly met): cooperative planning is neither complete nor
+  optimal. Fleets bigger than the work needs make less progress than smaller ones, and one-cell corridors with
+  three or more robots can deadlock, safely. The fleet interface cannot cancel a task, take a robot out of
+  service or edit the layout. Recordings cannot be authored from the CLI or watched in a window.
+- **Implemented, unverified**: the GUI and the editor in a real window (only SDL's dummy video driver was used),
+  the CI workflows (never run on a hosted runner), builds on Linux, GCC and Windows, checksums on other
+  platforms, leak detection.
+- **Not implemented**: a `LICENSE` file.
+
+What comes next, in priority order, is in [ROADMAP.md](ROADMAP.md).
 
 The rest of this file is the reference for each part of the simulator.
 
@@ -770,10 +794,11 @@ Baseline (this commit; the full default sweep, 36 runs, takes about 2 seconds; a
 | fulfilment | 4 | 3 | 190.0 | 47.5 | 220.0 | 441.7 | 95.5 | 3.3 | 1.6 | 2.9 | 39.5 | 106.8 | 227.6 | 602.3 |
 | fulfilment | 8 | 3 | 332.4 | 41.5 | 508.6 | 323.0 | 95.9 | 7.7 | 1.8 | 2.4 | 41.3 | 580.4 | 1109.6 | 629.6 |
 
-`backlog` is the mean number of tasks still open at the end of a run. Obtained with Apple clang at `-O1
--ffp-contract=off` through the local verification harness, not the CMake Release preset (which I could
-not run); a simulation's output does not depend on timing, but I have not compared optimisation levels or
-platforms, and the numbers are simulation outputs, not performance measurements of the code.
+`backlog` is the mean number of tasks still open at the end of a run. The table was first produced with
+Apple clang at `-O1 -ffp-contract=off`, and the CMake `release` preset (`-O3`, link-time optimisation) gives
+the same figures in every row of this table and of the next one (compared row by row). A simulation's output does not depend on timing or on the optimisation level, but
+other compilers and platforms have not been compared (see [docs/verification.md](docs/verification.md)), and
+the numbers are simulation outputs, not performance measurements of the code.
 
 How to read it, and how not to:
 
@@ -787,13 +812,14 @@ How to read it, and how not to:
   (demo 77.6 → 55.5, compact 73.2 → 36.5, fulfilment 51.6 → 41.5).
 - **The small room congests first.** With 8 robots the 12×8 `compact` room has robots waiting 20.1% of the
   time (demo 9.9%, fulfilment 7.7%), preventing about 1700 conflicts per simulated hour, driving more cells
-  per task (33.0 against 26.2 for one robot) and getting the least out of the extra robots. I did not
-  investigate why beyond what the table shows.
+  per task (33.0 against 26.2 for one robot) and getting the least out of the extra robots. The table does not
+  say why; the campaign in [docs/benchmarks.md](docs/benchmarks.md#scenario-campaign) runs larger fleets and
+  finds the cause only as a likely one.
 - **`mean done` is not a trip time and is not monotonic in the fleet size.** With hundreds of open tasks it
   mostly reflects how long the tasks that happened to be served had waited (priority and age decide who is
   served), and the three seeds are few. Compare it only between runs that are not backlogged.
-- **Three seeds are a baseline, not a confidence interval.** The numbers are exact for these seeds; I make
-  no claim about how much they vary with others (the demo hall's throughput varies by about ±3 tasks per
+- **Three seeds are a baseline, not a confidence interval.** The numbers are exact for these seeds; no claim
+  is made about how much they vary with others (the demo hall's throughput varies by about ±3 tasks per
   500 ticks between seeds, see the collision-avoidance notes).
 
 The same sweep with work the fleet can keep up with (`warehousesim_fleet_bench --spawn 25 --layouts
@@ -814,8 +840,9 @@ Here throughput stops at the offered load (about 140–143 tasks per hour for 4 
 drops to one or two tasks, mean completion time falls to 50–70 s, and utilization tells something at last:
 it halves or worse as robots are added past what the work needs. Extra robots then only cost: in the demo hall
 8 robots wait 12.6% of the time (against 1.8% for 4), complete fewer tasks per hour than 4 (129.6 against
-142.8; I did not check how much of that is seed noise), and the energy estimate per task rises because idle
-robots draw power in the model (idle drain 1 per tick).
+142.8; a difference this small can be seed noise, but the campaign finds much larger drops at 16 and 64
+robots, in nine of ten layouts at 16, see [docs/benchmarks.md](docs/benchmarks.md#scenario-campaign)), and
+the energy estimate per task rises because idle robots draw power in the model (idle drain 1 per tick).
 
 ### Limits
 
@@ -837,16 +864,16 @@ robots draw power in the model (idle drain 1 per tick).
 
 This section is about how long the program takes to compute, not about simulated results: everything in
 it is a wall-clock time or a count of what the program did. The times are from one machine (Apple M4,
-10 hardware threads), built by hand with Apple clang 21 at `-O3 -DNDEBUG` (the figures of this section
-were taken before CMake could be installed; [docs/benchmarks.md](docs/benchmarks.md) has the figures of
-the CMake `release` preset, with link-time optimisation, and says which of these they reproduce), and are
-medians of the number of runs stated. They say nothing about real robots or other machines; rerun `warehousesim_scaling_bench` on a
-Release build to get your own.
+10 hardware threads), with hand-built binaries (Apple clang 21, `-O3 -DNDEBUG`), and are medians of the number
+of runs stated. [docs/benchmarks.md](docs/benchmarks.md) repeats the whole-step and thread measurements with
+the CMake `release` preset (link-time optimisation) and says which of these it reproduces. The figures say
+nothing about real robots or other machines; rerun `warehousesim_scaling_bench` on a Release build to get
+your own.
 
 ### How it was measured
 
 A small sampling profiler (a `SIGPROF` timer and `backtrace`, in a scratch driver that is not part of the
-repository, because the system's `sample` tool gave nothing in the sandbox) on a build with `-O2` and frame
+repository, because the system's `sample` tool gave nothing here) on a build with `-O2` and frame
 pointers; percentages are shares of the samples on the stepping thread. Allocations were counted by
 replacing `operator new` in a scratch driver, after 500 warm-up steps. Timings are the median of five
 runs of the old and the new engine, alternated on the same configurations and the same planning limits;
@@ -1044,7 +1071,7 @@ per step, not two: the state before the last step is the one it already holds.
   means to do that.
 - Memory: a space-time planner keeps distance fields for up to 512 goals and 32 MB; `PathDistance` keeps 32
   fields (about 33 MB on a 512x512 map). Before, the estimator kept no fields.
-- The numbers are from one machine, one compiler and a hand-built `-O3`, for two worker threads at most.
+- The numbers are from one machine and one compiler, for two worker threads at most.
 
 ## Recording and replay
 

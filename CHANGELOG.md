@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `ROADMAP.md`: 20 prioritised next steps with scope, dependencies, acceptance criteria and estimates.
+- `docs/verification.md`: what is implemented, verified, partial and unverified, the checks run on a fresh
+  clone, and a manual checklist for a real window. The README gains a status summary.
+- `AGENTS.md` now states the repository's own rules (boundaries, verification commands) instead of the
+  instructions it was first written under.
+
 ## 1.0.0
 
 The first release. Everything below is new in it; the history of how it grew is in `git log`.
