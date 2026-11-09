@@ -7,7 +7,13 @@
 - Build fixes found by the first hosted run: counters of unsigned type are increased with unsigned literals
   (GCC 13, `-Werror=sign-conversion`), and `std::fill` on a `vector<char>` takes a `char` (MSVC C4244). No
   behaviour change, no warning switched off.
-- `docs/verification.md` records the hosted run and which jobs have not run since their fixes.
+- Build fixes found by the second hosted run: the enumerator `EventSource::Command` is now `FromCommand` (GCC
+  `-Wshadow`: it shadowed the `Command` alias; the stored values and the strings "command" and "engine" are
+  unchanged), three references to the result of `asText` are copies (GCC `-Wdangling-reference`), and the
+  compile-time allocation comparison in the regression bench is an `if constexpr` (MSVC C4127). No behaviour
+  change, no warning switched off.
+- `docs/verification.md` records the hosted runs and which jobs have not run since their fixes; the developer
+  guide says how to see GCC's diagnostics locally.
 - `LICENSE`: the MIT license. The release archive installs it with the documents.
 - `scripts/leaks_macos.sh`: runs the command line program, the GUI, the editor and every test executable under
   macOS `leaks --atExit`, each bounded by a time limit (18 programs, 0 leaks).

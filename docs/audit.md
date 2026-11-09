@@ -175,9 +175,9 @@ which are correctly rounded, and `sin`, `cos` and `pow` in `view` only.
 - Recording and replay: the pinned checksum of a scenario and a recording made earlier replay exactly.
 
 **Residual risk.** The audit was run on macOS (Apple clang 21, arm64, libc++). The pinned checksum test, the
-recording kept as a fixture and the rest of the suite also passed in the first hosted run on Ubuntu x86-64 with
-clang, so the checksums agree on those two platforms. With GCC or MSVC they are **unverified** (neither has
-compiled the code yet; see [verification.md](verification.md#hosted-ci)). `-ffp-contract=off` is a GCC and
+recording kept as a fixture and the rest of the suite also passed in the hosted runs on Ubuntu x86-64 with
+clang and on macOS 26, so the checksums agree on those platforms. With GCC or MSVC they are **unverified**
+(neither has finished building the code in CI; see [verification.md](verification.md#hosted-ci)). `-ffp-contract=off` is a GCC and
 clang flag; MSVC's default floating-point mode was not examined, and the MSVC job is marked experimental for
 that reason.
 
@@ -196,9 +196,9 @@ that reason.
 
 ## What was not checked
 
-- Builds with GCC and MSVC, Windows, and the macOS CI jobs (see [verification.md](verification.md#hosted-ci)
-  for the first hosted run and what has not run since its fixes). The audit itself ran on macOS; Ubuntu with
-  clang passed the same test suite in CI.
+- Builds with GCC and MSVC, and Windows (see [verification.md](verification.md#hosted-ci) for the hosted
+  runs and what has not run since its fixes). The audit itself ran on macOS; Ubuntu with clang and macOS 26
+  passed the same test suite in CI.
 - Valgrind on Linux, and a reading of the hosted `asan` log for a LeakSanitizer line (the job ran with leak
   detection enabled and passed; on macOS `leaks(1)` was used).
 - A real window: mouse and keyboard mapping, SDL's rendering, on-screen text. The GUI and the editor ran

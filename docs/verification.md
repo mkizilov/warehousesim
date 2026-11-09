@@ -21,18 +21,19 @@ platform: **macOS 27.2 on Apple M4 (arm64)**, Apple clang 21.0.0 with libc++, CM
 clang-format 21.1.8 and clang-tidy 21.1.6 (the pinned versions in `.venv`), with real GoogleTest 1.17.0,
 nlohmann_json 3.12.0 and SDL3 3.2.0 fetched by CMake. At most two workers were used, and every test ran under
 the 900 s limit of the test presets. Rows marked † were last run on commit `bc58d15`; all the others on
-`53725a2`. The two differ in the types of some literals (the GCC and MSVC fixes below), the macOS runner label,
-the license file, the leak script and documents: no behaviour, which the unchanged results back up (the same
-1 538 tests, the same regression baseline, the same campaign totals).
+`77518c8`. The two differ in the types of some literals, a renamed enumerator, three string copies, an
+`if constexpr` (the GCC and MSVC fixes below), the macOS runner label, the license file, the leak script and
+documents: no behaviour, which the unchanged results back up (the same 1 538 tests, the same regression
+baseline, the same campaign totals).
 
 Hosted runners are a separate platform and are covered under Hosted CI below.
 
 | Check | Result |
 |---|---|
-| `clang-format --dry-run --Werror` over 211 files in `src apps tests bench testing` | 0 violations |
+| `clang-format --dry-run --Werror` over 217 files in `src apps tests bench testing` | 0 violations |
 | `cmake --preset default` (Debug, GUI, real SDL3), build, `ctest --preset default -j2` | **1 538 of 1 538** pass in 76 s; project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings |
 | `cmake --preset release` (`-O3`, link-time optimisation), build, `ctest --preset release -j2` | **1 538 of 1 538** pass in 9 s; no warnings in project code (the SDL3 and GoogleTest sources produce a few of their own) |
-| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 248 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
+| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 246 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
 | `ctest --preset tsan -j2` (ThreadSanitizer) † | **1 533 of 1 533** pass in 617 s, 0 ThreadSanitizer reports |
 | `cmake --preset tidy`, then build (clang-tidy on every project target, warnings are errors) | builds with exit 0; clang-tidy ran in 67 compile steps (`--warnings-as-errors=*`), **0 findings** in project code |
 | `warehousesim_regression_bench` against `bench/regression_baseline.txt` | 5 of 5 scenarios identical (done, failed, search work, state checksum, allocations) |
@@ -47,26 +48,47 @@ Hosted runners are a separate platform and are covered under Hosted CI below.
 
 ### Hosted CI
 
-The first hosted run (id 42566965565, commit `315b9b8`) and what became of it:
+`ci.yml` has run twice on hosted runners: run 42566965565 on commit `315b9b8` and run 42576051990 on commit
+`69afde0`. Job results, from the GitHub API:
 
-| Job | Result |
-|---|---|
-| `format` | passed |
-| `clang-tidy` | passed |
-| `build-test`, Ubuntu 24.04 (x86-64), clang, Debug + GUI | passed: build and all tests; the scenario campaign, example audits, record and replay, metrics export, and the GUI and editor smoke runs on the dummy driver |
-| `build-test`, Ubuntu 24.04, clang, Release + GUI | passed: the same, plus the planning, fleet and scaling benchmarks, the regression gate and the packaged program |
-| `sanitizers`, `asan` (run with `ASAN_OPTIONS=detect_leaks=1`) and `tsan` | passed, the whole suite each |
-| `build-test`, macOS, clang (two jobs) | cancelled before any step: the `macos-14` image had been retired. They now use `macos-26` (commit `d92cd2a`); **not run since** |
-| `build-test`, Ubuntu, GCC 13, headless (experimental) | failed to compile: `-Werror=sign-conversion`, a `uint64_t` counter increased by an `int` ternary. Fixed in `1ff3bad`; **not run since** |
-| `build-test`, Windows, MSVC, headless (experimental) | failed to compile: C4244 from `std::fill` on a `vector<char>` given an `int`. Fixed in `1ff3bad`; **not run since** |
+| Job | Run 1 (`315b9b8`) | Run 2 (`69afde0`) |
+|---|---|---|
+| `format` | passed | passed |
+| `clang-tidy` | passed | passed |
+| `build-test`, Ubuntu 24.04 (x86-64), clang, Debug + GUI | passed: build and all tests; the scenario campaign, example audits, record and replay, metrics export, and the GUI and editor smoke runs on the dummy driver | passed |
+| `build-test`, Ubuntu 24.04, clang, Release + GUI | passed: the same, plus the planning, fleet and scaling benchmarks, the regression gate and the packaged program | passed |
+| `sanitizers`, `asan` (run with `ASAN_OPTIONS=detect_leaks=1`) and `tsan` | passed, the whole suite each | passed |
+| `build-test`, macOS, clang, Debug + GUI | cancelled before any step: the `macos-14` image had been retired | passed on `macos-26`: build, all tests, campaign, example audits, record and replay, metrics export, GUI and editor smoke runs |
+| `build-test`, macOS, clang, Release + GUI | cancelled, as above | passed: the same, plus the benchmarks, the regression gate, the macOS leak check (a `continue-on-error` step that reported success; its log was not read) and the packaged program |
+| `build-test`, Ubuntu, GCC 13, headless (experimental) | failed to compile: `-Werror=sign-conversion`, a `uint64_t` counter increased by an `int` ternary (fixed in `1ff3bad`, `53725a2`) | failed to compile: `-Werror=shadow` (the enumerator `EventSource::Command` against the `Command` alias, `recording.hpp:53`) and `-Werror=dangling-reference` (`recording_file.cpp:514`, `574`, `589`). Fixed in `03c73ee` and `c30a216`; **not run since** |
+| `build-test`, Windows, MSVC, headless (experimental) | failed to compile: C4244 from `std::fill` on a `vector<char>` given an `int` (fixed in `1ff3bad`) | failed to compile: C4127, a constant conditional, at `bench/regression_bench.cpp:306`. Fixed in `77518c8`; **not run since** |
 
-A build stops at its first failing compile, so the GCC and MSVC jobs may report further diagnostics behind the
-first. Neither compiler can be run on the macOS development machine (it has no GCC, and MSVC is Windows-only),
-so the fixes came from the diagnostics and from searching the code for the same shape: every unsigned counter
-that receives an `int` ternary now receives an unsigned one (`1ff3bad`, and three plain initialisations of the
-same shape in `53725a2`; the types are the only change), and every `std::fill` and `assign` was checked
-against its element type. The job logs were not read; the annotations of
-the run carry only the exit status.
+Both required macOS jobs and the Ubuntu jobs pass the pinned-checksum tests, the recording fixture and the
+regression baseline, so the state checksums agree between macOS arm64 (local and hosted) and Ubuntu x86-64 with
+clang.
+
+The GCC and MSVC diagnostics of run 2 are quoted from the job logs as they were relayed; the check annotations
+of a run carry only the exit status, and the logs need a signed-in GitHub session, so they were not fetched. A
+build stops at its first failing target, so the GCC and MSVC jobs may report further diagnostics behind these.
+
+**GCC, locally.** A GCC for macOS arm64 was installed under `.tools/` (conda-forge, GCC 16.2.0; the steps are in
+the [developer guide](developer-guide.md#gcc-diagnostics-without-gcc-13)). On `69afde0` it reports exactly the
+GCC errors of run 2 and nothing else: the `Command` shadowing in seven library and program translation units
+that include `recording.hpp` (the tests are built with a lighter warning set, without `-Wshadow`), and the three
+dangling references. After the fixes, the whole headless build compiles with no diagnostic: every library,
+program and benchmark with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror`, and the
+tests with `-Wall -Wextra -Wpedantic -Werror`. This is GCC 16, not 13: GCC 13's `-Wdangling-reference` is a coarser heuristic, and
+the libstdc++ differs. The executables this GCC links do not run correctly on the development machine (a
+GoogleTest program with a single test and no project code aborts, and a program printing with `std::cout` prints
+nothing), so no test, benchmark or program that it built was run: only compilation is checked.
+
+**MSVC** cannot be run here at all. For C4127 the fix is an `if constexpr`; the variant in which
+`kAllocationsComparable` is false (MSVC, or any library but libc++) was type-checked with the project's strict
+warning flags on a scratch copy of the file. Other MSVC `/W4 /WX` diagnostics behind it are unknown.
+
+The earlier fixes (`1ff3bad`, `53725a2`) came from the diagnostics and from searching the code for the same
+shape: every unsigned counter that receives an `int` ternary now receives an unsigned one, and every
+`std::fill` and `assign` was checked against its element type.
 
 **Measured while preparing the roadmap** (release build, this machine, not quiet: its load average was about 4):
 at a load the fleet serves, the engine step stays at 6.0 us from 2 x 10^4 to 10^6 ticks and peak memory goes from
@@ -110,11 +132,12 @@ cannot be rerun from here (roadmap step 12).
 | Benchmarks and numbers | **Verified** (one machine) | Apple M4, not quiet. Quote only the exact columns elsewhere; the timings belong to this machine |
 | Packaging | **Verified** on macOS arm64 and Ubuntu | `.tar.gz` of the programs, examples, documents and `LICENSE`, unpacked and run (on Ubuntu by the Release job); SDL3 linked statically. Windows, signing and notarisation: not done |
 | Example maps | **Verified** | six maps, canonical form, each audited, run twice, on two planning threads, recorded and replayed in the test suite |
-| clang-format, clang-tidy | **Verified** on macOS and Ubuntu | pinned versions; both also passed in the hosted run |
-| CI workflows (`ci.yml`, `release.yml`) | **Partial** | `ci.yml` ran once on hosted runners: format, clang-tidy, both Ubuntu clang jobs, `asan` and `tsan` passed (see Hosted CI above). The macOS, GCC 13 and MSVC jobs have not passed: the label and two type errors were fixed afterwards and have not run since. `release.yml` has not run (it runs on a version tag or by hand) |
-| Ubuntu (x86-64) with clang | **Verified** | the hosted run: Debug and Release builds with the GUI, all tests, benchmarks, the campaign and smoke runs, packaging, `asan`, `tsan`, clang-tidy |
-| GCC 13, Windows with MSVC, macOS on a hosted runner | **Implemented, unverified** | fixes committed after their first hosted run (above); not run since. Windows has not run the tests at all |
-| Cross-platform agreement of checksums and recordings | **Partial** | the pinned checksum test, the recording kept as a fixture and the rest of the suite pass on macOS arm64 (Apple clang, libc++) and on Ubuntu x86-64 (clang, the platform's default C++ library). GCC and MSVC: not run; `-ffp-contract=off` is set, MSVC's floating-point mode was not examined |
+| clang-format, clang-tidy | **Verified** on macOS and Ubuntu | pinned versions; both also passed in the hosted runs |
+| CI workflows (`ci.yml`, `release.yml`) | **Partial** | `ci.yml` ran twice on hosted runners; in the second run every required job passed (format, clang-tidy, both Ubuntu clang jobs, both macOS jobs, `asan`, `tsan`; see Hosted CI above). The experimental GCC 13 and MSVC jobs stopped at their build step in both runs; the second run's diagnostics are fixed and have not run since. `release.yml` has not run (it runs on a version tag or on demand) |
+| Ubuntu (x86-64) with clang | **Verified** | the hosted runs: Debug and Release builds with the GUI, all tests, benchmarks, the campaign and smoke runs, packaging, `asan`, `tsan`, clang-tidy |
+| macOS 26 (arm64) on a hosted runner | **Verified** | the second hosted run: Debug and Release builds with the GUI, all tests, benchmarks, the regression gate, the campaign, record and replay, smoke runs, the macOS leak check (step reported success, log not read) and packaging |
+| GCC 13 (Linux), Windows with MSVC | **Implemented, unverified** | both stopped at a compile error in each hosted run, and the errors of run 2 are fixed but have not run since. The code compiles with a local GCC 16.2.0 and no diagnostic (compilation only, see Hosted CI). Windows has not run the tests at all |
+| Cross-platform agreement of checksums and recordings | **Partial** | the pinned checksum test, the recording kept as a fixture, the regression baseline and the rest of the suite pass on macOS arm64 (Apple clang, libc++; locally and on a hosted runner) and on Ubuntu x86-64 (clang, the platform's default C++ library). GCC and MSVC: not run; `-ffp-contract=off` is set, MSVC's floating-point mode was not examined |
 | Leak detection | **Verified** on macOS | `scripts/leaks_macos.sh`: 0 leaks in 18 programs (the CLI, the GUI, the editor, all ten test executables); ownership is by RAII (no raw `new`/`delete`). On Linux the hosted `asan` job runs with LeakSanitizer enabled and passed (its log was not read for a LeakSanitizer line); Valgrind: not run (roadmap 11) |
 | Parser security (map file, recording) | **Partial** | strict, bounded in size and depth, never throw or crash on the inputs tried, one random-damage test (recordings only); no fuzzing |
 | File output security | **Partial** | all-or-nothing by rename; the temporary file name is predictable and not created exclusively (roadmap 9) |

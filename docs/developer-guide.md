@@ -164,13 +164,35 @@ regenerate the recording fixture (see AGENTS.md, "Changing what a simulation com
 | `sanitizers` | `asan` and `tsan` on Ubuntu, the whole suite |
 | `clang-tidy` | the `tidy` preset on Ubuntu (experimental) |
 
-Every preset has been run locally on macOS (Apple clang 21, arm64). The first hosted run (commit `315b9b8`)
-passed `format`, `clang-tidy`, the two Ubuntu clang jobs, `asan` (with leak detection) and `tsan`; its two macOS
-jobs were cancelled because the `macos-14` image had been retired (they now use `macos-26`), and the GCC 13
-and MSVC jobs stopped at their first compile error (since fixed). None of those three has run again. The
-GCC and MSVC builds stop at the first failing compile, so a later red job there may show the next error:
-treat it as information about the platform, not necessarily a regression. [verification.md](verification.md)
-keeps the list of what has passed.
+Every preset has been run locally on macOS (Apple clang 21, arm64). In the second hosted run (commit
+`69afde0`) every required job passed (`format`, `clang-tidy`, the two Ubuntu clang jobs, the two macOS jobs on
+`macos-26`, `asan` with leak detection, `tsan`); the experimental GCC 13 and MSVC jobs failed to compile, as in
+the first run, at errors that are fixed afterwards and have not run since. A build stops at its first failing
+target, so a red GCC or MSVC job may show the next error: treat it as information about the platform, not
+necessarily a regression. [verification.md](verification.md) keeps the list of what has passed.
+
+### GCC diagnostics without GCC 13
+
+Neither GCC nor MSVC is part of the macOS toolchain. To see GCC's diagnostics before pushing, a GCC for
+macOS arm64 can be installed under `.tools/` (git-ignored) with micromamba and built against the headless
+preset; this finds compile errors only:
+
+```sh
+mkdir -p .tools/mm && curl -sSL https://micro.mamba.pm/api/micromamba/osx-arm64/latest | tar -xj -C .tools/mm bin/micromamba
+MAMBA_ROOT_PREFIX=$PWD/.tools/mm/root .tools/mm/bin/micromamba create --no-rc -y -p .tools/gcc --override-channels \
+  -c conda-forge gxx_impl_osx-arm64=16.2.0 gcc_impl_osx-arm64=16.2.0
+GCC=$PWD/.tools/gcc/bin/arm64-apple-darwin20.0.0
+PATH=$PWD/.tools/gcc/bin:$PATH SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+  cmake --preset headless -DCMAKE_C_COMPILER=$GCC-gcc -DCMAKE_CXX_COMPILER=$GCC-g++ -DCMAKE_OSX_SYSROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+PATH=$PWD/.tools/gcc/bin:$PATH cmake --build --preset headless -j2 -- -k 0
+```
+
+conda-forge's GCC for macOS arm64 starts at 15.2, so this is GCC 16.2.0, not 13, and its
+`-Wdangling-reference` is not the same heuristic. It does report the `-Wshadow` and `-Wdangling-reference` errors
+the GCC 13 job reported. The executables it links do not run correctly on the development machine (a GoogleTest
+program of one test aborts, and `std::cout` prints nothing), so this checks that the code compiles with the
+project's flags, not that it behaves. The `gtest_discover_tests` step of the test targets then fails at the end
+of the build; the library, the programs and the benchmarks build.
 
 ## Releasing
 
