@@ -99,9 +99,11 @@ cmake --preset tsan && cmake --build --preset tsan -j2 && ctest --preset tsan -j
 ```
 
 `-fno-sanitize-recover=all` is on, so a finding aborts the test instead of printing and carrying on.
-LeakSanitizer is not available on macOS; CI runs it on Linux (`ASAN_OPTIONS=detect_leaks=1`). The
-allocation-counting tests and benchmark parts are left out under sanitizers because they replace
-`operator new`.
+LeakSanitizer is not available on macOS; CI is configured to run it on Linux (`ASAN_OPTIONS=detect_leaks=1`),
+where it has not yet run. On macOS use `scripts/leaks_macos.sh build/release`, which runs the command line
+program, the GUI, the editor and every test executable under `leaks --atExit` (each bounded by
+`LEAKS_TIME_LIMIT`, default 900 s) and fails on any leak. The allocation-counting tests and benchmark parts are
+left out under sanitizers because they replace `operator new`.
 
 ## Static analysis and formatting
 

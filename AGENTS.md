@@ -50,7 +50,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `FleetController`, `FleetSession`, `EditorController`); no SDL | core, world, simulation, editor |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
-`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning, fleet, scaling and regression benchmarks; `scripts/campaign.py` the audited scenario campaign; `examples/` the example maps; `docs/` the user, architecture and developer guides, the audit and the benchmark results.
+`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning, fleet, scaling and regression benchmarks; `scripts/campaign.py` the audited scenario campaign and `scripts/leaks_macos.sh` the macOS leak check; `examples/` the example maps; `docs/` the user, architecture and developer guides, the audit and the benchmark results.
 
 ### Clean architecture
 
@@ -354,11 +354,13 @@ cmake --build --preset package                                            # the 
 cmake --preset asan && cmake --build --preset asan -j2 && ctest --preset asan -j2   # ASan + UBSan + float checks
 cmake --preset tsan && cmake --build --preset tsan -j2 && ctest --preset tsan -j2   # ThreadSanitizer
 cmake --preset tidy && cmake --build --preset tidy -j2                              # clang-tidy
+sh scripts/leaks_macos.sh build/release                                             # leaks(1) over the programs and tests (macOS)
 find src apps tests bench testing \( -name '*.cpp' -o -name '*.hpp' \) | xargs clang-format --dry-run --Werror
 ```
 
-Use `--preset headless` when SDL3 cannot be built or fetched. Report any check you could not run, and why,
-rather than skipping it silently.
+Use `--preset headless` when SDL3 cannot be built or fetched. Every test is bounded (900 s in the test presets):
+a hang is reported by name, so diagnose it by running that test alone instead of waiting. Report any check you
+could not run, and why, rather than skipping it silently.
 
 `docs/verification.md` says what has been checked, on which platform and at which commit, and what has not
 (implemented, verified, partial, unverified). Keep it true: when a check is run for the first time, or a claim

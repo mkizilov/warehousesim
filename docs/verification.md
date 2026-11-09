@@ -16,30 +16,31 @@ Anything not listed here has not been checked.
 
 ## What was run
 
-All checks were run on a **fresh clone of commit `070ca45`** (so a clean checkout, with nothing left over from
+All checks were run on a **fresh clone of commit `bc58d15`** (a clean checkout, with nothing left over from
 earlier builds), on one platform: **macOS 27.2 on Apple M4 (arm64)**, Apple clang 21.0.0 with libc++, CMake
 3.31.6, Ninja 1.11.1, clang-format 21.1.8 and clang-tidy 21.1.6 (the pinned versions in `.venv`), with real
-GoogleTest 1.17.0, nlohmann_json 3.12.0 and SDL3 3.2.0 fetched by CMake. At most two workers were used. The code
-in the commit that adds this document is the same as in `070ca45`; only documents changed.
+GoogleTest 1.17.0, nlohmann_json 3.12.0 and SDL3 3.2.0 fetched by CMake. At most two workers were used, and every
+test ran under the 900 s limit of the test presets. Network access and DNS work: PyPI and the three dependency
+sources answered, so nothing here depends on an earlier cached download. The commit that adds this document
+changes documents, adds `scripts/leaks_macos.sh` (run against the builds below) and one CI step that runs it.
 
 | Check | Result |
 |---|---|
 | `clang-format --dry-run --Werror` over 211 files in `src apps tests bench testing` | 0 violations |
-| `cmake --preset release`, then `cmake --build --preset release -j2` | configures and builds. Project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings. The build log has 41 compiler warnings, 40 in SDL3's Objective-C sources and 1 in a GoogleTest header, none in project code |
-| `ctest --preset release -j2` | **1 538 of 1 538** pass (about 10 s) |
-| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 249 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
-| `ctest --preset tsan -j2` (ThreadSanitizer) | **1 533 of 1 533** pass in 647 s, 0 ThreadSanitizer reports (`-fsanitize=thread` confirmed in the build) |
-| `cmake --preset tidy`, then build (clang-tidy on every project target, warnings are errors) | builds with exit 0; clang-tidy ran in 67 compile steps (`--warnings-as-errors=*`), **0 findings** in project code. The installed tool was shown to report a deliberately planted null dereference |
+| `cmake --preset default` (Debug, GUI, real SDL3), build, `ctest --preset default -j2` | **1 538 of 1 538** pass in 77 s; project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings |
+| `cmake --preset release` (`-O3`, link-time optimisation), build, `ctest --preset release -j2` | **1 538 of 1 538** pass in 10 s; no warnings in project code (the SDL3 and GoogleTest sources produce a few of their own) |
+| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 253 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
+| `ctest --preset tsan -j2` (ThreadSanitizer) | **1 533 of 1 533** pass in 617 s, 0 ThreadSanitizer reports |
+| `cmake --preset tidy`, then build (clang-tidy on every project target, warnings are errors) | builds with exit 0; clang-tidy ran in 67 compile steps (`--warnings-as-errors=*`), **0 findings** in project code |
 | `warehousesim_regression_bench` against `bench/regression_baseline.txt` | 5 of 5 scenarios identical (done, failed, search work, state checksum, allocations) |
-| `scripts/campaign.py` (10 layouts x fleets 1, 4, 16, 64 x 3 loads x 3 seeds, 2 000 ticks, every run `--audit`) | 333 runs audited, **666 333 states, 0 violations**; 27 further runs refused because the layout has no room for the fleet. The totals (32 214 tasks done, 3 507 failed, 12 883 given up, 66 669 rings detected) are the same as in the earlier run of the same tree |
-| `warehousesim_fleet_bench` against the README's two fleet tables | every row of both tables (12 and 8 rows) has the same figures |
-| `cmake --build --preset package`; `cmake --install build/release --prefix DIR` | the archive builds; the install puts 16 files in `DIR` and `DIR/bin/warehousesim_cli --version` runs |
-| the commands in the user guide and the README (18 of them: CLI runs, `--metrics`, `--metrics-csv`, `--record`, `--replay` with and without `--ticks`/`--no-verify`, `--threads 2`, bad layout, missing map, conflicting options, GUI and editor with `SDL_VIDEODRIVER=dummy`, `campaign.py --quick`, install) | all ran, with the exit statuses the documents give (0, and 2 for a bad layout or conflicting options, 1 for a missing map) |
-| the GUI and the editor, 5 to 30 frames with SDL's dummy video driver | start, run and exit with status 0 |
-
-Earlier, on the same platform and on the working tree that became `070ca45`: the packaged archive unpacked in
-another directory runs (CLI with `--audit`, GUI on the dummy driver) and links no library outside the system
-frameworks; the three sanitizer suites and clang-tidy were also clean there.
+| `scripts/campaign.py` (10 layouts x fleets 1, 4, 16, 64 x 3 loads x 3 seeds, 2 000 ticks, every run `--audit`) | 333 runs audited, **666 333 states, 0 violations**; 27 further runs refused because the layout has no room for the fleet. The totals (32 214 tasks done, 3 507 failed, 12 883 given up, 66 669 rings detected) are the same as in every earlier run of this tree |
+| `cmake --build --preset package` and unpacking the archive | the archive holds the three programs, the six example maps, the documents and `LICENSE`, and the archive's `LICENSE` is byte-identical to the repository's; the unpacked `warehousesim_cli --version` runs |
+| the commands in AGENTS.md's verification block that run a program from `build/default` (9) | all ran with exit status 0 |
+| the GUI and the editor on the **real macOS video driver** (SDL's default: `cocoa`, with the `metal` renderer), 5 frames each | start, run and exit with status 0 |
+| a scratch SDL program linked the way the GUI is, on the same machine | default driver `cocoa` and renderer `metal` draw a colour and read the same colour back (10, 200, 30); the `dummy` driver (software renderer) reads it back exactly too; the `offscreen` driver cannot create a window here (it needs OpenGL) |
+| `scripts/leaks_macos.sh build/release`: macOS `leaks --atExit` over 18 programs (the CLI in six configurations, the GUI and the editor on the dummy driver, and all ten test executables), each bounded to 900 s | **0 leaks in all 18**. The tool was shown to report a deliberately planted 4 KB leak. The GUI and the editor were also clean on the real Cocoa driver (30 frames each) |
+| LeakSanitizer | not available with Apple's clang, so `leaks(1)` was used (above); LeakSanitizer on Linux has not been run |
+| a scan of the 265 tracked files, and of the contents and messages of all earlier commits, for credentials, caches, binaries and generated files | none found; no credential-like string in any revision. Early versions of `AGENTS.md` (up to `070ca45`) contain a local filesystem path, which the current version no longer has; history was not rewritten |
 
 **Measured while preparing the roadmap** (release build, this machine, not quiet: its load average was about 4):
 at a load the fleet serves, the engine step stays at 6.0 us from 2 x 10^4 to 10^6 ticks and peak memory goes from
@@ -72,22 +73,22 @@ cannot be rerun from here (roadmap step 12).
 | Deadlock detection and recovery | **Partial** | rings are detected and mostly broken; 111 of 333 campaign runs had failed tasks (a task is given up after 150 stuck ticks) |
 | Simulated metrics, dashboard text, CSV (`metrics`) | **Verified** | hand-checked tests, zero-denominator rules, CSV columns pinned. Every figure is simulated |
 | Map file and editing model (`mapio`, `editor`) | **Verified** | pinned text, strict refusals with JSON Pointers, round trips, random halls, undo and redo. Not fuzzed (roadmap 8) |
-| Map editor program | **Implemented, unverified** | its logic is tested without a window; the program ran 5 to 30 frames on SDL's dummy driver. Real keys, mouse, text and drawing have not been seen (roadmap 6). No file-name entry, no rectangle or fill tool |
+| Map editor program | **Implemented, unverified** | its logic is tested without a window; the program starts, renders and exits on the real Cocoa/Metal driver (5 frames) and on the dummy driver (30), with no leaks. Nothing was typed or clicked and nobody looked at the picture: real keys, mouse, text and drawing are unchecked (roadmap 6). No file-name entry, no rectangle or fill tool |
 | Fleet interface logic (`view`: controller, session, scenes) | **Partial** | tested with a real runner and no window, including determinism of what the interface does. Cannot cancel a task, take a robot out of service or edit the layout; keeps a copy of the layout for judging clicks that goes stale after `PlaceObstacle` (roadmap 3) |
-| SDL3 window and drawing (`rendering`, `apps/gui`) | **Implemented, unverified** | compiles and links against real SDL3 3.2.0 (static) and ran 5 to 30 frames on the dummy driver. The mapping from real input, the drawing, the text (SDL's debug font) and resizing have not been checked by eye or by a test |
+| SDL3 window and drawing (`rendering`, `apps/gui`) | **Implemented, unverified** | compiles and links against real SDL3 3.2.0 (static); starts, renders and exits on the real Cocoa/Metal driver (5 frames) and on the dummy driver (30), with no leaks, and a probe read a drawn colour back exactly from both renderers. The mapping from real input, the look of the drawing, the text (SDL's debug font) and resizing have not been checked by eye or by a test |
 | Recording and replay | **Partial** | verified on this platform: record, replay, divergence reports, a recording kept as a fixture, replays on 0 and 2 planning threads. The CLI cannot give commands, a replay cannot be watched in a window, a recording starts at tick 0 with the default planner and dispatcher, and replaying has no time budget (roadmap 4 and 8). Checksums on other platforms: unverified |
 | Planning threads (`--threads`) | **Verified** | the state and checksum are the same for every thread count; TSan-clean. The gain is small (2 to 5 % of a whole step) |
 | Command line (`warehousesim_cli`) | **Verified** | the documented commands, exit statuses, equal output for equal seeds. `--audit` checks every step |
 | Invariant auditor | **Verified** | each rule fires on a state, built directly in the test, that breaks it; real runs are clean; auditing never changes a run |
 | Performance regression gate | **Verified** | exact behaviour and allocations against a committed baseline; time only against times saved on one machine. Allocation comparison is off for other standard libraries than libc++ |
 | Benchmarks and numbers | **Verified** (one machine) | Apple M4, not quiet. Quote only the exact columns elsewhere; the timings belong to this machine |
-| Packaging | **Verified** on macOS arm64 | `.tar.gz` of the programs, examples and documents, unpacked and run; SDL3 linked statically. Other operating systems, signing and notarisation: not done |
+| Packaging | **Verified** on macOS arm64 | `.tar.gz` of the programs, examples, documents and `LICENSE`, unpacked and run; SDL3 linked statically. Other operating systems, signing and notarisation: not done |
 | Example maps | **Verified** | six maps, canonical form, each audited, run twice, on two planning threads, recorded and replayed in the test suite |
 | clang-format, clang-tidy | **Verified** on macOS | pinned versions; tidy against Linux headers has not been run |
 | CI workflows (`ci.yml`, `release.yml`) | **Implemented, unverified** | the YAML parses; no hosted runner has run them. Experimental jobs (GCC 13, MSVC, clang-tidy on Linux) are marked as such |
 | Linux, GCC, Windows, MSVC builds | **Implemented, unverified** | nothing outside macOS arm64 with Apple clang has been built |
 | Cross-platform agreement of checksums and recordings | **Implemented, unverified** | the pinned checksum test and the fixture recording exist to find out; `-ffp-contract=off` is set, MSVC's mode was not examined |
-| Leak detection | **Implemented, unverified** | ownership is by RAII (no raw `new`/`delete`); LeakSanitizer does not exist with Apple's clang, so leaks were not tool-checked |
+| Leak detection | **Verified** on macOS | `scripts/leaks_macos.sh`: 0 leaks in 18 programs (the CLI, the GUI, the editor, all ten test executables); ownership is by RAII (no raw `new`/`delete`). LeakSanitizer and Valgrind on Linux: not run (roadmap 11) |
 | Parser security (map file, recording) | **Partial** | strict, bounded in size and depth, never throw or crash on the inputs tried, one random-damage test (recordings only); no fuzzing |
 | File output security | **Partial** | all-or-nothing by rename; the temporary file name is predictable and not created exclusively (roadmap 9) |
 | Supply chain | **Partial** | dependencies and tools pinned by tag and version, not by hash; actions by tag (roadmap 10) |
@@ -105,8 +106,10 @@ cannot be rerun from here (roadmap step 12).
 
 ## Manual checklist (real window)
 
-Not yet run. To be ticked on each operating system, with the date, the commit and the person; the
-automated parts of roadmap step 6 are meant to replace as much of it as can be replaced.
+Not yet run by a person. To be ticked on each operating system, with the date, the commit and the person; the
+automated parts of roadmap step 6 are meant to replace as much of it as can be replaced. A program has checked
+the first item only in the sense that the window opens, renders frames and closes (Cocoa/Metal, 5 frames, exit
+status 0); everything that needs input, or a look at the picture, is still open.
 
 Start `warehousesim_gui --layout fulfilment --robots 16 --spawn 3` and check:
 

@@ -3,6 +3,11 @@
 ## Unreleased
 
 - `LICENSE`: the MIT license. The release archive installs it with the documents.
+- `scripts/leaks_macos.sh`: runs the command line program, the GUI, the editor and every test executable under
+  macOS `leaks --atExit`, each bounded by a time limit (18 programs, 0 leaks).
+- Every test preset limits a test to 900 s and every CI job has a `timeout-minutes`.
+- The replay note about a recording of another engine revision now reads "the recording is from engine revision
+  N"; wording elsewhere that read as an attribution of how something was made is neutral.
 - `ROADMAP.md`: 20 prioritised next steps with scope, dependencies, acceptance criteria and estimates.
 - `docs/verification.md`: what is implemented, verified, partial and unverified, the checks run on a fresh
   clone, and a manual checklist for a real window. The README gains a status summary.

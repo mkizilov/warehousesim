@@ -35,7 +35,9 @@ the unfixed engine before it went green.
   of `stepAside`, or a `Task*` looked up in a queue).
 - ASan + UBSan: the whole suite (1 531 tests at the first run) clean, including the recorder, replay and
   runner tests that start and stop threads over and over. LeakSanitizer is not available with Apple's
-  clang, so **leaks were not checked by tool**; CI runs it on Linux.
+  clang, so leaks were checked with macOS's `leaks(1)` (`scripts/leaks_macos.sh`): 0 leaks in the CLI, the GUI,
+  the editor and all ten test executables, and the tool reports a leak planted on purpose. LeakSanitizer on Linux
+  has not been run.
 - clang-tidy (`bugprone-*`, `performance-*`, `clang-analyzer-*`, `concurrency-*` and others, see
   `.clang-tidy`) over all targets: 21 findings on the first real run and one more in the regression
   benchmark, written after it; all fixed (none suppressed). None was a wrong result. The two that touched ownership: a `std::move` of a trivially copyable value that did
@@ -43,7 +45,8 @@ the unfixed engine before it went green.
   (`bugprone-return-const-ref-from-parameter`: dangling if a caller passed a temporary; no caller did).
   It is now a function that checks and returns nothing.
 
-**Residual risk.** Leaks, as above; and a move-after-use in code the tests do not run.
+**Residual risk.** A leak on a path no test or run reaches (`leaks(1)` sees only what the run allocated and left
+  unreachable at exit); and a move-after-use in code the tests do not run.
 
 ## 2. Concurrency
 
@@ -194,7 +197,7 @@ the MSVC job is marked experimental for that reason.
 - Linux and Windows builds, GCC, MSVC, the CI jobs themselves, clang-tidy against Linux headers, and
   `clang-format` from the Ubuntu package (CI installs the pinned pip version instead). Nothing outside macOS
   was run.
-- LeakSanitizer (not available with Apple's clang).
+- LeakSanitizer and Valgrind on Linux (macOS's `leaks(1)` was used instead).
 - A real window: mouse and keyboard mapping, SDL's rendering, on-screen text. The GUI and the editor ran
   with SDL's dummy video driver for 30 frames, and the test suite covers everything they decide.
 - Cross-platform agreement of checksums and recordings.

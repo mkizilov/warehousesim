@@ -53,15 +53,18 @@ full table, with the checks behind each row and a checklist for a real window, i
 - **Verified** (checks run, on that platform, and passing): the engine and its modules; collision safety (no
   overlap, swap or doubly held cell in 666 333 audited states); planning, tasks, metrics, the map file and the
   editing model, recording and replay, planning threads, the command line, the benchmarks and the regression
-  gate, the release archive. 1 538 tests pass in the Release build and 1 533 under AddressSanitizer + UBSan
-  and under ThreadSanitizer (0 reports); clang-tidy (0 findings) and clang-format are clean.
+  gate, the release archive. 1 538 tests pass in the Debug build with the GUI and in the Release build, and 1 533
+  under AddressSanitizer + UBSan and under ThreadSanitizer (0 reports); clang-tidy (0 findings) and
+  clang-format are clean; macOS `leaks` finds no leak in 18 programs.
 - **Partial** (works, but a requirement is only partly met): cooperative planning is neither complete nor
   optimal. Fleets bigger than the work needs make less progress than smaller ones, and one-cell corridors with
   three or more robots can deadlock, safely. The fleet interface cannot cancel a task, take a robot out of
   service or edit the layout. Recordings cannot be authored from the CLI or watched in a window.
-- **Implemented, unverified**: the GUI and the editor in a real window (only SDL's dummy video driver was used),
-  the CI workflows (never run on a hosted runner), builds on Linux, GCC and Windows, checksums on other
-  platforms, leak detection.
+- **Implemented, unverified**: the GUI and the editor in interactive use (they start, render and exit on the
+  real macOS window system, but keys, mouse and appearance have not been checked), the CI workflows (never run
+  on a hosted runner), builds on Linux, GCC and Windows, checksums on other platforms, leak detection on
+  Linux.
+
 What comes next, in priority order, is in [ROADMAP.md](ROADMAP.md).
 
 The rest of this file is the reference for each part of the simulator.

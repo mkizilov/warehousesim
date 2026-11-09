@@ -16,10 +16,10 @@ measurements this roadmap cites are in [docs/benchmarks.md](docs/benchmarks.md) 
 | Group | Steps | Hours |
 |---|---|---:|
 | A. Requirements only partly met | 1 to 4 | 94 |
-| B. Verification, correctness and security gaps | 5 to 12 | 114 |
+| B. Verification, correctness and security gaps | 5 to 12 | 111 |
 | C. Code health that lowers risk | 13 | 16 |
 | D. New features | 14 to 20 | 162 |
-| **Total** | **20 steps** | **386** |
+| **Total** | **20 steps** | **383** |
 
 ---
 
@@ -174,11 +174,13 @@ software renderer and compare with golden frames within a tolerance.
 
 **Rationale.** The GUI and editor have only run with SDL's dummy video driver for a few frames. What they decide
 is tested without a display; the mapping from real keys and the mouse to that logic (Shift+Tab, Ctrl or Cmd
-with Z, Y, S and O, middle-button drag), the drawing, text, resizing and high-DPI behaviour are not.
+with Z, Y, S and O, middle-button drag), the drawing, text, resizing and high-DPI behaviour are not. What has
+been checked: both programs start, render and exit on the real macOS driver (`cocoa` with the `metal`
+renderer, 5 frames each), and a probe showed that a drawn colour is read back exactly from that renderer and
+from the dummy driver's software renderer, so golden frames are feasible without a display.
 
-**Dependencies.** None for the automated part, which relies on the renderer the program already creates on the
-dummy driver (that its pixels can be read back is to be confirmed in the first hours of the step); a desktop
-session for the manual part.
+**Dependencies.** None for the automated part, which uses the dummy driver's software renderer (pixel read-back
+confirmed); a desktop session for the manual part.
 
 **Acceptance criteria.**
 
@@ -187,7 +189,7 @@ session for the manual part.
   documented way to update them.
 - The manual checklist ticked on two operating systems, with date and commit.
 
-**Effort.** 20 h.
+**Effort.** 19 h.
 
 ## 7. Share one strict JSON reader between the two file formats
 
@@ -289,12 +291,14 @@ be used where this was developed, so any recipe starts out unverified.
 
 ## 11. Detect leaks, soak the engine, and bound long-run cost
 
-**Scope.** LeakSanitizer on Linux and Valgrind on the CLI; a nightly soak run (10^6 ticks, 256 robots) under
-AddressSanitizer; keep open tasks in an index so `snapshot()` costs the same however many tasks were finished;
+**Scope.** LeakSanitizer and Valgrind on Linux (macOS is covered by `scripts/leaks_macos.sh`); a nightly soak run
+(10^6 ticks, 256 robots) under AddressSanitizer; keep open tasks in an index so `snapshot()` costs the same however many tasks were finished;
 compact finished tasks to counters plus the last few; an optional cap on open tasks.
 
-**Rationale.** Leaks have never been checked by a tool (LeakSanitizer does not exist with Apple's clang), only by
-the ownership rules. Measured for this roadmap (details in the verification document): the engine's own step
+**Rationale.** On macOS, `leaks --atExit` reports 0 leaks in 18 programs (the CLI, the GUI, the editor and all
+ten test executables; `scripts/leaks_macos.sh`), and the tool reports a leak planted on purpose. On Linux no leak
+tool has run: LeakSanitizer and Valgrind are configured in CI but CI has not run. Measured for this roadmap
+(details in the verification document): the engine's own step
 time is flat over 10^6 ticks (6.0 us), memory at a load the fleet serves grows from 3.3 to 8.2 MB between
 2 x 10^4 and 10^6 ticks (about 120 bytes per finished task), but with a snapshot and an audit at every step the
 cost per step grew from 4.5 us at 2 x 10^4 ticks to 10.9 us at 3.2 x 10^5, because both scan every task ever made;
@@ -305,13 +309,13 @@ at 10^6 ticks.
 
 **Acceptance criteria.**
 
-- LeakSanitizer and Valgrind: 0 leaks over the suite and the CLI examples.
+- LeakSanitizer and Valgrind on Linux: 0 leaks over the suite and the CLI examples.
 - Soak: at a load the fleet serves, resident memory at 10^6 ticks is at most 1.1 times that at 10^5.
 - Per-step cost with a snapshot each step at 3.2 x 10^5 ticks is within 10 % of that at 2 x 10^4.
 - Every pinned checksum is unchanged (the change is behaviour-preserving); the cap on open tasks is off by
   default.
 
-**Effort.** 14 h.
+**Effort.** 12 h.
 
 ## 12. Make the test suite faster and free of real time, and keep the mutation checks
 
@@ -521,13 +525,13 @@ there is no generated reference and the libraries are internal.
 | Group | Steps | Hours |
 |---|---|---:|
 | A. Requirements only partly met | 1 (26), 2 (24), 3 (16), 4 (28) | 94 |
-| B. Verification, correctness and security | 5 (24), 6 (20), 7 (8), 8 (16), 9 (8), 10 (10), 11 (14), 12 (14) | 114 |
+| B. Verification, correctness and security | 5 (24), 6 (19), 7 (8), 8 (16), 9 (8), 10 (10), 11 (12), 12 (14) | 111 |
 | C. Code health | 13 (16) | 16 |
 | D. Features | 14 (24), 15 (16), 16 (32), 17 (40), 18 (20), 19 (18), 20 (12) | 162 |
-| **Total** | **20 steps** | **386** |
+| **Total** | **20 steps** | **383** |
 
-About 64 working days for one engineer (386 hours at 6 productive hours a day), or about 13 weeks. Groups A to C
-alone are 224 hours, about 37 working days. With two engineers working in parallel on independent steps
+About 64 working days for one engineer (383 hours at 6 productive hours a day), or about 13 weeks. Groups A to C
+alone are 221 hours, about 37 working days. With two engineers working in parallel on independent steps
 (for example 1 and 5, then 2 and 6) the calendar time is roughly 7 to 8 weeks.
 
 **Suggested order.** Steps 1, 5 and 6 first and in parallel: they decide whether the product behaves well, runs

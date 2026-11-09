@@ -88,6 +88,10 @@ jobs:
       - name: Performance regression gate (exact behaviour and allocations against the baseline)
         if: matrix.preset == 'release'
         run: build/release/bench/warehousesim_regression_bench
+      - name: Leak check (macOS leaks(1); not yet run on a hosted runner, so it does not fail the job)
+        if: runner.os == 'macOS' && matrix.preset == 'release'
+        continue-on-error: true
+        run: sh scripts/leaks_macos.sh build/release
       - name: Scenario campaign (every layout, fleet, load and seed, audited on every step)
         if: runner.os != 'Windows'
         run: |
