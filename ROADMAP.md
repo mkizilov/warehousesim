@@ -16,10 +16,10 @@ measurements this roadmap cites are in [docs/benchmarks.md](docs/benchmarks.md) 
 | Group | Steps | Hours |
 |---|---|---:|
 | A. Requirements only partly met | 1 to 4 | 94 |
-| B. Verification, correctness and security gaps | 5 to 12 | 111 |
+| B. Verification, correctness and security gaps | 5 to 12 | 104 |
 | C. Code health that lowers risk | 13 | 16 |
 | D. New features | 14 to 20 | 162 |
-| **Total** | **20 steps** | **383** |
+| **Total** | **20 steps** | **376** |
 
 ---
 
@@ -141,29 +141,34 @@ cannot be watched, only run headless; replay takes as long as running.
 
 ## B. Verification, correctness and security gaps
 
-## 5. Run and fix the CI on Linux, GCC and Windows
+## 5. Get every hosted CI job green on macOS, GCC and Windows
 
-**Scope.** Publish the repository and run `ci.yml` and `release.yml`. Fix what fails: `-Wconversion` and
-library differences on Linux (Clang and GCC 13, libstdc++), SDL3's prerequisites, MSVC. Compare the state
-checksums across platforms. Decide and document the supported platforms.
+**Scope.** Re-run `ci.yml` after the macOS label change and the GCC 13 and MSVC type fixes, and fix whatever
+those builds report beyond the first error (a build stops at its first failing compile). Run the tests on both
+compilers, compare the state checksums with those of macOS and Ubuntu clang, run `release.yml` once, and
+decide and document the supported platforms.
 
-**Rationale.** Everything has been run on one platform: macOS arm64 with Apple clang 21 and libc++. The
-workflows have never run on a hosted runner (only their YAML has been parsed). The pinned checksum test and
-the recording fixture were written to tell another platform whether its arithmetic agrees, and have not been
-asked. `-ffp-contract=off` is a GCC and clang flag; MSVC's mode has not been examined.
+**Rationale.** The first hosted run (commit `315b9b8`) passed on Ubuntu 24.04 with clang (Debug and Release
+with the GUI, AddressSanitizer with leak detection, ThreadSanitizer, clang-tidy, formatting), so the pinned
+checksum test and the recording fixture agree on macOS arm64 and Ubuntu x86-64. Both macOS jobs were cancelled
+because the `macos-14` image had been retired (they now use `macos-26`), and GCC 13 and MSVC each stopped at a
+type error that is now fixed; none of the three has run since. The Windows tests have never run, and
+`-ffp-contract=off` is a GCC and clang flag: MSVC's floating-point mode has not been examined.
 
-**Dependencies.** The repository published and a hosted CI available.
+**Dependencies.** The repository published and a hosted CI available (both are).
 
 **Acceptance criteria.**
 
-- All non-experimental jobs green on the main branch for three runs in a row.
-- `ThePinnedScenarioHasThePinnedChecksums` and the fixture replay pass on Linux x86-64 with Clang and with
-  GCC, or the divergence is traced to its cause and either fixed or documented with a plan (for example, a
-  per-platform checksum).
+- All non-experimental jobs, the two macOS jobs included, green on the main branch for three runs in a row.
+- The GCC 13 job green, with `ThePinnedScenarioHasThePinnedChecksums` and the fixture replay passing, or the
+  divergence traced to its cause and either fixed or documented with a plan (for example, a per-platform
+  checksum). The same for MSVC.
 - Windows headless is green, or declared unsupported in the README with the reason.
+- `release.yml` has run once and produced its archives.
 - The verification document moves each platform from unverified to verified, with the run it comes from.
 
-**Effort.** 24 h (Linux 8, Windows 12, checksum investigation 4). Uncertain: plus or minus 40 %.
+**Effort.** 18 h (GCC 4, Windows and MSVC 10, macOS and the release workflow 2, checksums and documents 2).
+Uncertain: plus or minus 40 %.
 
 ## 6. Verify the GUI and editor in a real window, and automate what can be
 
@@ -291,13 +296,15 @@ be used where this was developed, so any recipe starts out unverified.
 
 ## 11. Detect leaks, soak the engine, and bound long-run cost
 
-**Scope.** LeakSanitizer and Valgrind on Linux (macOS is covered by `scripts/leaks_macos.sh`); a nightly soak run
-(10^6 ticks, 256 robots) under AddressSanitizer; keep open tasks in an index so `snapshot()` costs the same however many tasks were finished;
+**Scope.** Valgrind on the command line program (macOS is covered by `scripts/leaks_macos.sh`, Linux by
+LeakSanitizer in the hosted `asan` job); a nightly soak run (10^6 ticks, 256 robots) under AddressSanitizer;
+keep open tasks in an index so `snapshot()` costs the same however many tasks were finished;
 compact finished tasks to counters plus the last few; an optional cap on open tasks.
 
 **Rationale.** On macOS, `leaks --atExit` reports 0 leaks in 18 programs (the CLI, the GUI, the editor and all
-ten test executables; `scripts/leaks_macos.sh`), and the tool reports a leak planted on purpose. On Linux no leak
-tool has run: LeakSanitizer and Valgrind are configured in CI but CI has not run. Measured for this roadmap
+ten test executables; `scripts/leaks_macos.sh`), and the tool reports a leak planted on purpose. On Linux the
+hosted `asan` job runs the suite with LeakSanitizer enabled and passed (its log has not been read for a
+LeakSanitizer line); Valgrind has not run. Measured for this roadmap
 (details in the verification document): the engine's own step
 time is flat over 10^6 ticks (6.0 us), memory at a load the fleet serves grows from 3.3 to 8.2 MB between
 2 x 10^4 and 10^6 ticks (about 120 bytes per finished task), but with a snapshot and an audit at every step the
@@ -305,17 +312,18 @@ cost per step grew from 4.5 us at 2 x 10^4 ticks to 10.9 us at 3.2 x 10^5, becau
 and in a saturated run (`demo`, 4 robots, a task every 5 ticks) the open backlog grows without limit, to 240 MB
 at 10^6 ticks.
 
-**Dependencies.** Step 5 for the Linux parts.
+**Dependencies.** None for the soak and the index; a Linux machine for Valgrind.
 
 **Acceptance criteria.**
 
-- LeakSanitizer and Valgrind on Linux: 0 leaks over the suite and the CLI examples.
+- Valgrind: 0 leaks over the CLI examples; the hosted `asan` log shows LeakSanitizer active.
+  (LeakSanitizer itself: 0 leaks over the suite, already passing.)
 - Soak: at a load the fleet serves, resident memory at 10^6 ticks is at most 1.1 times that at 10^5.
 - Per-step cost with a snapshot each step at 3.2 x 10^5 ticks is within 10 % of that at 2 x 10^4.
 - Every pinned checksum is unchanged (the change is behaviour-preserving); the cap on open tasks is off by
   default.
 
-**Effort.** 12 h.
+**Effort.** 11 h.
 
 ## 12. Make the test suite faster and free of real time, and keep the mutation checks
 
@@ -525,13 +533,13 @@ there is no generated reference and the libraries are internal.
 | Group | Steps | Hours |
 |---|---|---:|
 | A. Requirements only partly met | 1 (26), 2 (24), 3 (16), 4 (28) | 94 |
-| B. Verification, correctness and security | 5 (24), 6 (19), 7 (8), 8 (16), 9 (8), 10 (10), 11 (12), 12 (14) | 111 |
+| B. Verification, correctness and security | 5 (18), 6 (19), 7 (8), 8 (16), 9 (8), 10 (10), 11 (11), 12 (14) | 104 |
 | C. Code health | 13 (16) | 16 |
 | D. Features | 14 (24), 15 (16), 16 (32), 17 (40), 18 (20), 19 (18), 20 (12) | 162 |
-| **Total** | **20 steps** | **383** |
+| **Total** | **20 steps** | **376** |
 
-About 64 working days for one engineer (383 hours at 6 productive hours a day), or about 13 weeks. Groups A to C
-alone are 221 hours, about 37 working days. With two engineers working in parallel on independent steps
+About 63 working days for one engineer (376 hours at 6 productive hours a day), or about 13 weeks. Groups A to C
+alone are 214 hours, about 36 working days. With two engineers working in parallel on independent steps
 (for example 1 and 5, then 2 and 6) the calendar time is roughly 7 to 8 weeks.
 
 **Suggested order.** Steps 1, 5 and 6 first and in parallel: they decide whether the product behaves well, runs

@@ -174,10 +174,12 @@ which are correctly rounded, and `sin`, `cos` and `pow` in `view` only.
   tests cover empty runs.
 - Recording and replay: the pinned checksum of a scenario and a recording made earlier replay exactly.
 
-**Residual risk.** Everything above was run on one platform (Apple clang 21, arm64, libc++). Whether the
-checksums agree on x86-64, with GCC or with MSVC is **unverified**; the pinned tests are what would say
-so. `-ffp-contract=off` is a GCC and clang flag; MSVC's default floating-point mode was not examined, and
-the MSVC job is marked experimental for that reason.
+**Residual risk.** The audit was run on macOS (Apple clang 21, arm64, libc++). The pinned checksum test, the
+recording kept as a fixture and the rest of the suite also passed in the first hosted run on Ubuntu x86-64 with
+clang, so the checksums agree on those two platforms. With GCC or MSVC they are **unverified** (neither has
+compiled the code yet; see [verification.md](verification.md#hosted-ci)). `-ffp-contract=off` is a GCC and
+clang flag; MSVC's default floating-point mode was not examined, and the MSVC job is marked experimental for
+that reason.
 
 ## Defects found by this audit and the release checks
 
@@ -194,13 +196,14 @@ the MSVC job is marked experimental for that reason.
 
 ## What was not checked
 
-- Linux and Windows builds, GCC, MSVC, the CI jobs themselves, clang-tidy against Linux headers, and
-  `clang-format` from the Ubuntu package (CI installs the pinned pip version instead). Nothing outside macOS
-  was run.
-- LeakSanitizer and Valgrind on Linux (macOS's `leaks(1)` was used instead).
+- Builds with GCC and MSVC, Windows, and the macOS CI jobs (see [verification.md](verification.md#hosted-ci)
+  for the first hosted run and what has not run since its fixes). The audit itself ran on macOS; Ubuntu with
+  clang passed the same test suite in CI.
+- Valgrind on Linux, and a reading of the hosted `asan` log for a LeakSanitizer line (the job ran with leak
+  detection enabled and passed; on macOS `leaks(1)` was used).
 - A real window: mouse and keyboard mapping, SDL's rendering, on-screen text. The GUI and the editor ran
   with SDL's dummy video driver for 30 frames, and the test suite covers everything they decide.
-- Cross-platform agreement of checksums and recordings.
+- Agreement of checksums and recordings on GCC and MSVC (macOS arm64 and Ubuntu x86-64 with clang agree).
 - Maps beyond 512 x 512 cells and fleets beyond 512 robots (both refused by design), and fleets between 256
   and 512 robots (256 is the largest run in the benchmarks and tests).
 - Docker was not involved.

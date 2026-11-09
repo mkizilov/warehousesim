@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- CI: the macOS jobs, cancelled in the first hosted run because the `macos-14` image had been retired, run
+  on `macos-26`; the release workflow too.
+- Build fixes found by the first hosted run: counters of unsigned type are increased with unsigned literals
+  (GCC 13, `-Werror=sign-conversion`), and `std::fill` on a `vector<char>` takes a `char` (MSVC C4244). No
+  behaviour change, no warning switched off.
+- `docs/verification.md` records the hosted run and which jobs have not run since their fixes.
 - `LICENSE`: the MIT license. The release archive installs it with the documents.
 - `scripts/leaks_macos.sh`: runs the command line program, the GUI, the editor and every test executable under
   macOS `leaks --atExit`, each bounded by a time limit (18 programs, 0 leaks).

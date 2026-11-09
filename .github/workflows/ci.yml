@@ -33,8 +33,8 @@ jobs:
             | xargs -0 "$HOME/.local/bin/clang-format" --dry-run --Werror
 
   # The platforms and compilers the project is built and tested on. The first four are the
-  # supported configurations; the last two are experimental (they have not been run by the authors,
-  # so a failure there is reported but does not fail the workflow).
+  # supported configurations; the last two are experimental (a failure there is reported but does
+  # not fail the workflow).
   build-test:
     name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -178,8 +178,8 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
-  # clang-tidy with the version the code was cleaned with (run by the authors on macOS). Against the
-  # compiler and headers of this runner it has not been run, hence experimental.
+  # clang-tidy with the pinned version, against the compiler and headers of this runner.
+  # Experimental: a failure is reported but does not fail the workflow.
   clang-tidy:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

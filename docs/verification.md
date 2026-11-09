@@ -16,31 +16,57 @@ Anything not listed here has not been checked.
 
 ## What was run
 
-All checks were run on a **fresh clone of commit `bc58d15`** (a clean checkout, with nothing left over from
-earlier builds), on one platform: **macOS 27.2 on Apple M4 (arm64)**, Apple clang 21.0.0 with libc++, CMake
-3.31.6, Ninja 1.11.1, clang-format 21.1.8 and clang-tidy 21.1.6 (the pinned versions in `.venv`), with real
-GoogleTest 1.17.0, nlohmann_json 3.12.0 and SDL3 3.2.0 fetched by CMake. At most two workers were used, and every
-test ran under the 900 s limit of the test presets. Network access and DNS work: PyPI and the three dependency
-sources answered, so nothing here depends on an earlier cached download. The commit that adds this document
-changes documents, adds `scripts/leaks_macos.sh` (run against the builds below) and one CI step that runs it.
+The local checks ran on fresh clones (a clean checkout, with nothing left over from earlier builds), on one
+platform: **macOS 27.2 on Apple M4 (arm64)**, Apple clang 21.0.0 with libc++, CMake 3.31.6, Ninja 1.11.1,
+clang-format 21.1.8 and clang-tidy 21.1.6 (the pinned versions in `.venv`), with real GoogleTest 1.17.0,
+nlohmann_json 3.12.0 and SDL3 3.2.0 fetched by CMake. At most two workers were used, and every test ran under
+the 900 s limit of the test presets. Rows marked † were last run on commit `bc58d15`; all the others on
+`53725a2`. The two differ in the types of some literals (the GCC and MSVC fixes below), the macOS runner label,
+the license file, the leak script and documents: no behaviour, which the unchanged results back up (the same
+1 538 tests, the same regression baseline, the same campaign totals).
+
+Hosted runners are a separate platform and are covered under Hosted CI below.
 
 | Check | Result |
 |---|---|
 | `clang-format --dry-run --Werror` over 211 files in `src apps tests bench testing` | 0 violations |
-| `cmake --preset default` (Debug, GUI, real SDL3), build, `ctest --preset default -j2` | **1 538 of 1 538** pass in 77 s; project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings |
-| `cmake --preset release` (`-O3`, link-time optimisation), build, `ctest --preset release -j2` | **1 538 of 1 538** pass in 10 s; no warnings in project code (the SDL3 and GoogleTest sources produce a few of their own) |
-| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 253 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
-| `ctest --preset tsan -j2` (ThreadSanitizer) | **1 533 of 1 533** pass in 617 s, 0 ThreadSanitizer reports |
+| `cmake --preset default` (Debug, GUI, real SDL3), build, `ctest --preset default -j2` | **1 538 of 1 538** pass in 76 s; project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings |
+| `cmake --preset release` (`-O3`, link-time optimisation), build, `ctest --preset release -j2` | **1 538 of 1 538** pass in 9 s; no warnings in project code (the SDL3 and GoogleTest sources produce a few of their own) |
+| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 248 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
+| `ctest --preset tsan -j2` (ThreadSanitizer) † | **1 533 of 1 533** pass in 617 s, 0 ThreadSanitizer reports |
 | `cmake --preset tidy`, then build (clang-tidy on every project target, warnings are errors) | builds with exit 0; clang-tidy ran in 67 compile steps (`--warnings-as-errors=*`), **0 findings** in project code |
 | `warehousesim_regression_bench` against `bench/regression_baseline.txt` | 5 of 5 scenarios identical (done, failed, search work, state checksum, allocations) |
 | `scripts/campaign.py` (10 layouts x fleets 1, 4, 16, 64 x 3 loads x 3 seeds, 2 000 ticks, every run `--audit`) | 333 runs audited, **666 333 states, 0 violations**; 27 further runs refused because the layout has no room for the fleet. The totals (32 214 tasks done, 3 507 failed, 12 883 given up, 66 669 rings detected) are the same as in every earlier run of this tree |
 | `cmake --build --preset package` and unpacking the archive | the archive holds the three programs, the six example maps, the documents and `LICENSE`, and the archive's `LICENSE` is byte-identical to the repository's; the unpacked `warehousesim_cli --version` runs |
-| the commands in AGENTS.md's verification block that run a program from `build/default` (9) | all ran with exit status 0 |
-| the GUI and the editor on the **real macOS video driver** (SDL's default: `cocoa`, with the `metal` renderer), 5 frames each | start, run and exit with status 0 |
-| a scratch SDL program linked the way the GUI is, on the same machine | default driver `cocoa` and renderer `metal` draw a colour and read the same colour back (10, 200, 30); the `dummy` driver (software renderer) reads it back exactly too; the `offscreen` driver cannot create a window here (it needs OpenGL) |
-| `scripts/leaks_macos.sh build/release`: macOS `leaks --atExit` over 18 programs (the CLI in six configurations, the GUI and the editor on the dummy driver, and all ten test executables), each bounded to 900 s | **0 leaks in all 18**. The tool was shown to report a deliberately planted 4 KB leak. The GUI and the editor were also clean on the real Cocoa driver (30 frames each) |
-| LeakSanitizer | not available with Apple's clang, so `leaks(1)` was used (above); LeakSanitizer on Linux has not been run |
-| a scan of the 265 tracked files, and of the contents and messages of all earlier commits, for credentials, caches, binaries and generated files | none found; no credential-like string in any revision. Early versions of `AGENTS.md` (up to `070ca45`) contain a local filesystem path, which the current version no longer has; history was not rewritten |
+| the commands in AGENTS.md's verification block that run a program from `build/default` (9) † | all ran with exit status 0 |
+| the GUI and the editor on the **real macOS video driver** (SDL's default: `cocoa`, with the `metal` renderer), 5 frames each † | start, run and exit with status 0 |
+| a scratch SDL program linked the way the GUI is, on the same machine † | default driver `cocoa` and renderer `metal` draw a colour and read the same colour back (10, 200, 30); the `dummy` driver (software renderer) reads it back exactly too; the `offscreen` driver cannot create a window here (it needs OpenGL) |
+| `scripts/leaks_macos.sh build/release`: macOS `leaks --atExit` over 18 programs (the CLI in six configurations, the GUI and the editor on the dummy driver, and all ten test executables), each bounded to 900 s † | **0 leaks in all 18**. The tool was shown to report a deliberately planted 4 KB leak. The GUI and the editor were also clean on the real Cocoa driver (30 frames each) |
+| LeakSanitizer | not available with Apple's clang, so `leaks(1)` was used (above); on Linux it ran in the hosted `asan` job |
+| a scan of the tracked files, and of the contents and messages of all earlier commits, for credentials, caches, binaries and generated files † | none found; no credential-like string in any revision. Early versions of `AGENTS.md` (up to `070ca45`) contain a local filesystem path, which the current version no longer has; history was not rewritten |
+
+### Hosted CI
+
+The first hosted run (id 42566965565, commit `315b9b8`) and what became of it:
+
+| Job | Result |
+|---|---|
+| `format` | passed |
+| `clang-tidy` | passed |
+| `build-test`, Ubuntu 24.04 (x86-64), clang, Debug + GUI | passed: build and all tests; the scenario campaign, example audits, record and replay, metrics export, and the GUI and editor smoke runs on the dummy driver |
+| `build-test`, Ubuntu 24.04, clang, Release + GUI | passed: the same, plus the planning, fleet and scaling benchmarks, the regression gate and the packaged program |
+| `sanitizers`, `asan` (run with `ASAN_OPTIONS=detect_leaks=1`) and `tsan` | passed, the whole suite each |
+| `build-test`, macOS, clang (two jobs) | cancelled before any step: the `macos-14` image had been retired. They now use `macos-26` (commit `d92cd2a`); **not run since** |
+| `build-test`, Ubuntu, GCC 13, headless (experimental) | failed to compile: `-Werror=sign-conversion`, a `uint64_t` counter increased by an `int` ternary. Fixed in `1ff3bad`; **not run since** |
+| `build-test`, Windows, MSVC, headless (experimental) | failed to compile: C4244 from `std::fill` on a `vector<char>` given an `int`. Fixed in `1ff3bad`; **not run since** |
+
+A build stops at its first failing compile, so the GCC and MSVC jobs may report further diagnostics behind the
+first. Neither compiler can be run on the macOS development machine (it has no GCC, and MSVC is Windows-only),
+so the fixes came from the diagnostics and from searching the code for the same shape: every unsigned counter
+that receives an `int` ternary now receives an unsigned one (`1ff3bad`, and three plain initialisations of the
+same shape in `53725a2`; the types are the only change), and every `std::fill` and `assign` was checked
+against its element type. The job logs were not read; the annotations of
+the run carry only the exit status.
 
 **Measured while preparing the roadmap** (release build, this machine, not quiet: its load average was about 4):
 at a load the fleet serves, the engine step stays at 6.0 us from 2 x 10^4 to 10^6 ticks and peak memory goes from
@@ -76,19 +102,20 @@ cannot be rerun from here (roadmap step 12).
 | Map editor program | **Implemented, unverified** | its logic is tested without a window; the program starts, renders and exits on the real Cocoa/Metal driver (5 frames) and on the dummy driver (30), with no leaks. Nothing was typed or clicked and nobody looked at the picture: real keys, mouse, text and drawing are unchecked (roadmap 6). No file-name entry, no rectangle or fill tool |
 | Fleet interface logic (`view`: controller, session, scenes) | **Partial** | tested with a real runner and no window, including determinism of what the interface does. Cannot cancel a task, take a robot out of service or edit the layout; keeps a copy of the layout for judging clicks that goes stale after `PlaceObstacle` (roadmap 3) |
 | SDL3 window and drawing (`rendering`, `apps/gui`) | **Implemented, unverified** | compiles and links against real SDL3 3.2.0 (static); starts, renders and exits on the real Cocoa/Metal driver (5 frames) and on the dummy driver (30), with no leaks, and a probe read a drawn colour back exactly from both renderers. The mapping from real input, the look of the drawing, the text (SDL's debug font) and resizing have not been checked by eye or by a test |
-| Recording and replay | **Partial** | verified on this platform: record, replay, divergence reports, a recording kept as a fixture, replays on 0 and 2 planning threads. The CLI cannot give commands, a replay cannot be watched in a window, a recording starts at tick 0 with the default planner and dispatcher, and replaying has no time budget (roadmap 4 and 8). Checksums on other platforms: unverified |
+| Recording and replay | **Partial** | verified on this platform: record, replay, divergence reports, a recording kept as a fixture, replays on 0 and 2 planning threads. The CLI cannot give commands, a replay cannot be watched in a window, a recording starts at tick 0 with the default planner and dispatcher, and replaying has no time budget (roadmap 4 and 8). Checksums agree between macOS arm64 and Ubuntu x86-64 (the fixture replays on both); GCC and MSVC: not run |
 | Planning threads (`--threads`) | **Verified** | the state and checksum are the same for every thread count; TSan-clean. The gain is small (2 to 5 % of a whole step) |
 | Command line (`warehousesim_cli`) | **Verified** | the documented commands, exit statuses, equal output for equal seeds. `--audit` checks every step |
 | Invariant auditor | **Verified** | each rule fires on a state, built directly in the test, that breaks it; real runs are clean; auditing never changes a run |
-| Performance regression gate | **Verified** | exact behaviour and allocations against a committed baseline; time only against times saved on one machine. Allocation comparison is off for other standard libraries than libc++ |
+| Performance regression gate | **Verified** | exact behaviour and allocations against a committed baseline; time only against times saved on one machine. Allocation comparison is off for other standard libraries than libc++. The Release job on Ubuntu passed the gate too (behaviour columns) |
 | Benchmarks and numbers | **Verified** (one machine) | Apple M4, not quiet. Quote only the exact columns elsewhere; the timings belong to this machine |
-| Packaging | **Verified** on macOS arm64 | `.tar.gz` of the programs, examples, documents and `LICENSE`, unpacked and run; SDL3 linked statically. Other operating systems, signing and notarisation: not done |
+| Packaging | **Verified** on macOS arm64 and Ubuntu | `.tar.gz` of the programs, examples, documents and `LICENSE`, unpacked and run (on Ubuntu by the Release job); SDL3 linked statically. Windows, signing and notarisation: not done |
 | Example maps | **Verified** | six maps, canonical form, each audited, run twice, on two planning threads, recorded and replayed in the test suite |
-| clang-format, clang-tidy | **Verified** on macOS | pinned versions; tidy against Linux headers has not been run |
-| CI workflows (`ci.yml`, `release.yml`) | **Implemented, unverified** | the YAML parses; no hosted runner has run them. Experimental jobs (GCC 13, MSVC, clang-tidy on Linux) are marked as such |
-| Linux, GCC, Windows, MSVC builds | **Implemented, unverified** | nothing outside macOS arm64 with Apple clang has been built |
-| Cross-platform agreement of checksums and recordings | **Implemented, unverified** | the pinned checksum test and the fixture recording exist to find out; `-ffp-contract=off` is set, MSVC's mode was not examined |
-| Leak detection | **Verified** on macOS | `scripts/leaks_macos.sh`: 0 leaks in 18 programs (the CLI, the GUI, the editor, all ten test executables); ownership is by RAII (no raw `new`/`delete`). LeakSanitizer and Valgrind on Linux: not run (roadmap 11) |
+| clang-format, clang-tidy | **Verified** on macOS and Ubuntu | pinned versions; both also passed in the hosted run |
+| CI workflows (`ci.yml`, `release.yml`) | **Partial** | `ci.yml` ran once on hosted runners: format, clang-tidy, both Ubuntu clang jobs, `asan` and `tsan` passed (see Hosted CI above). The macOS, GCC 13 and MSVC jobs have not passed: the label and two type errors were fixed afterwards and have not run since. `release.yml` has not run (it runs on a version tag or by hand) |
+| Ubuntu (x86-64) with clang | **Verified** | the hosted run: Debug and Release builds with the GUI, all tests, benchmarks, the campaign and smoke runs, packaging, `asan`, `tsan`, clang-tidy |
+| GCC 13, Windows with MSVC, macOS on a hosted runner | **Implemented, unverified** | fixes committed after their first hosted run (above); not run since. Windows has not run the tests at all |
+| Cross-platform agreement of checksums and recordings | **Partial** | the pinned checksum test, the recording kept as a fixture and the rest of the suite pass on macOS arm64 (Apple clang, libc++) and on Ubuntu x86-64 (clang, the platform's default C++ library). GCC and MSVC: not run; `-ffp-contract=off` is set, MSVC's floating-point mode was not examined |
+| Leak detection | **Verified** on macOS | `scripts/leaks_macos.sh`: 0 leaks in 18 programs (the CLI, the GUI, the editor, all ten test executables); ownership is by RAII (no raw `new`/`delete`). On Linux the hosted `asan` job runs with LeakSanitizer enabled and passed (its log was not read for a LeakSanitizer line); Valgrind: not run (roadmap 11) |
 | Parser security (map file, recording) | **Partial** | strict, bounded in size and depth, never throw or crash on the inputs tried, one random-damage test (recordings only); no fuzzing |
 | File output security | **Partial** | all-or-nothing by rename; the temporary file name is predictable and not created exclusively (roadmap 9) |
 | Supply chain | **Partial** | dependencies and tools pinned by tag and version, not by hash; actions by tag (roadmap 10) |

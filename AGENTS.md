@@ -364,8 +364,9 @@ could not run, and why, rather than skipping it silently.
 
 `docs/verification.md` says what has been checked, on which platform and at which commit, and what has not
 (implemented, verified, partial, unverified). Keep it true: when a check is run for the first time, or a claim
-stops being true, change it in the same commit. CI (`.github/workflows/`) is configured to run these checks but
-has not yet run on a hosted runner. `ROADMAP.md` is the prioritised list of what remains.
+stops being true, change it in the same commit. CI (`.github/workflows/`) runs these checks on hosted runners;
+the verification document records which jobs have passed and which have not run since a fix.
+`ROADMAP.md` is the prioritised list of what remains.
 
 ### Dependencies
 

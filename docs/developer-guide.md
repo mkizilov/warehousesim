@@ -99,8 +99,8 @@ cmake --preset tsan && cmake --build --preset tsan -j2 && ctest --preset tsan -j
 ```
 
 `-fno-sanitize-recover=all` is on, so a finding aborts the test instead of printing and carrying on.
-LeakSanitizer is not available on macOS; CI is configured to run it on Linux (`ASAN_OPTIONS=detect_leaks=1`),
-where it has not yet run. On macOS use `scripts/leaks_macos.sh build/release`, which runs the command line
+LeakSanitizer is not available on macOS; the Linux `asan` CI job runs with it (`ASAN_OPTIONS=detect_leaks=1`).
+On macOS use `scripts/leaks_macos.sh build/release`, which runs the command line
 program, the GUI, the editor and every test executable under `leaks --atExit` (each bounded by
 `LEAKS_TIME_LIMIT`, default 900 s) and fails on any leak. The allocation-counting tests and benchmark parts are
 left out under sanitizers because they replace `operator new`.
@@ -164,10 +164,13 @@ regenerate the recording fixture (see AGENTS.md, "Changing what a simulation com
 | `sanitizers` | `asan` and `tsan` on Ubuntu, the whole suite |
 | `clang-tidy` | the `tidy` preset on Ubuntu (experimental) |
 
-What has been run by the authors: every preset on macOS (Apple clang 21, arm64). What is configured but
-has not been run: the Ubuntu jobs, GCC, MSVC, the macOS runner image, and clang-tidy against the Linux
-headers. Treat the first red job on those as information about the platform, not necessarily a
-regression.
+Every preset has been run locally on macOS (Apple clang 21, arm64). The first hosted run (commit `315b9b8`)
+passed `format`, `clang-tidy`, the two Ubuntu clang jobs, `asan` (with leak detection) and `tsan`; its two macOS
+jobs were cancelled because the `macos-14` image had been retired (they now use `macos-26`), and the GCC 13
+and MSVC jobs stopped at their first compile error (since fixed). None of those three has run again. The
+GCC and MSVC builds stop at the first failing compile, so a later red job there may show the next error:
+treat it as information about the platform, not necessarily a regression. [verification.md](verification.md)
+keeps the list of what has passed.
 
 ## Releasing
 
