@@ -78,7 +78,7 @@ On the raw batches of independent path questions they do help:
 Preparing a frame for drawing (snapshot, interpolation and the draw list, not the SDL calls) takes under
 0.6 % of a 60 fps frame at 100 to 256 robots. Executing the draw commands in SDL is not measured.
 
-These agree with the README's figures, which were measured with hand-built binaries: its
+These agree with the README's figures, which were measured with directly compiled binaries: its
 scaling table gave 0.290, 0.372 and 0.770 ms a step for 100, 128 and 256 robots on one thread, against
 0.286, 0.367 and 0.768 here. Its table of "single-thread speed" with the engine's fixed planning limits
 (0.233, 0.297 and 0.492 ms) is a different measurement: the shipped `large` scenario scales the limits with

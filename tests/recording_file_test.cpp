@@ -37,7 +37,7 @@ using warehousesim::simulation::TaskEvent;
 using warehousesim::simulation::TaskEventKind;
 using warehousesim::simulation::validate;
 
-// ---- a small recording written out by hand ------------------------------------------------------
+// ---- a small recording written out in full ------------------------------------------------------
 
 // Every kind of command, a refused one, tasks made and cancelled, checkpoints and an end.
 Recording small() {

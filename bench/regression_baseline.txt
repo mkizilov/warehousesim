@@ -1,4 +1,4 @@
-# Written by warehousesim_regression_bench --write-baseline. Behaviour is exact; the
+# Regenerate with warehousesim_regression_bench --write-baseline. Behaviour is exact; the
 # last column is heap allocations per step (0 when it could not be counted).
 # scenario completed failed searches work checksum allocations
 demo-x4 213 0 623 59471 f1c46bfa9aa2d45b 8

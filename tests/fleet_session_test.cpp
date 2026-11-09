@@ -217,7 +217,7 @@ TEST(FleetSessionTest, ARefusedPriorityChangeShowsTheReasonFromTheSimulation) {
   gui.runner.start(10);
   ASSERT_TRUE(gui.runner.waitForTick(10, kTimeout));
   gui.frame({});
-  // Task 1 was made by the generator at tick 0 and a robot has it by now.
+  // Task 1 comes from the generator at tick 0 and a robot has it by now.
   ASSERT_FALSE(gui.drawn.activeTasks.empty());
   const auto id = gui.drawn.activeTasks[0].id;
   ASSERT_NE(gui.drawn.activeTasks[0].status, TaskStatus::Pending);
@@ -437,7 +437,7 @@ TEST(FleetDeterminismTest, PausingAndChangingSpeedFromTheKeyboardAtRandomDoesNot
 
 TEST(FleetDeterminismTest, ATaskAddedWhilePausedLeadsToTheSameRunAsAddingItBeforeStepOne) {
   // Paused, no step has run, so every clicked-out task is applied at tick 0, and the run that
-  // follows must be exactly that of a simulation that had the same tasks submitted by hand.
+  // follows must be exactly that of a simulation that had the same tasks submitted directly.
   Gui gui(6);
   gui.pause();
   gui.runner.start(150);

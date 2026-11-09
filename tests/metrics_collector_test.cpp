@@ -647,7 +647,7 @@ TEST(MetricsCollectorTest, TheTimeScaleOnlyRescalesTimeNeverTheCounts) {
 }
 
 TEST(MetricsCollectorTest, TheStandardEnergyModelIsTheOneTheBundledRobotsWithBatteriesHave) {
-  // metrics::EnergyModel::standard() is written out by hand in the metrics module, which knows
+  // metrics::EnergyModel::standard() is written out separately in the metrics module, which knows
   // nothing about scenarios; this keeps it from drifting from the robots it describes.
   EXPECT_TRUE(energyModelOf(*warehousesim::simulation::makeLayoutSimulation("compact", 1)) ==
               EnergyModel::standard());

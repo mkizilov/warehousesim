@@ -17,7 +17,7 @@
 //   {
 //     "format":  "warehousesim-recording",        required, exactly this text
 //     "version": 1,                               required, the integer 1
-//     "engine":  1,                               required: the engine revision it was made by
+//     "engine":  1,                               required: the engine revision that recorded it
 //     "scenario": {                               required: what the simulation is built from
 //       "seed":   5,                              the random seed, an integer from 0 to 2^64 - 1
 //       "layout": ["#####", "#.D.#", ...],        one text per row, one character per cell:
@@ -53,8 +53,8 @@
 //   }
 //
 // Checksums are 16 lowercase hexadecimal digits. Everything but "scenario" and "ticks" may be left
-// out of a file made by hand: a recording with commands and no "taskEvents", "checkpoints" or "end"
-// is a scenario script. It replays as it says, and only the commands' "accepted" is checked.
+// out of a file written manually: a recording with commands and no "taskEvents", "checkpoints" or
+// "end" is a scenario script. It replays as it says, and only the commands' "accepted" is checked.
 //
 // A change that old readers cannot understand gets a new version number; a reader that sees a newer
 // version than it knows says so instead of guessing.

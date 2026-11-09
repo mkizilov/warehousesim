@@ -293,7 +293,8 @@ TEST(CommandsTest, CommandsAreComparableValues) {
                (SetTaskPriority{TaskId{2}, TaskPriority::Low}));
 }
 
-// ---- a task made by a command is an ordinary task -----------------------------------------------
+// ---- a task submitted through a command is an ordinary task
+// -----------------------------------------------
 
 TEST(CommandsTest, ACommandTaskIsDeliveredLikeAnyOther) {
   SimulationConfig config = ideal();
@@ -306,8 +307,8 @@ TEST(CommandsTest, ACommandTaskIsDeliveredLikeAnyOther) {
 }
 
 TEST(CommandsTest, TaskCommandsDoNotDisturbTheRandomTaskStream) {
-  // Tasks the generator makes are the same with or without a task added by hand: the command takes
-  // no draw from the generator's random numbers.
+  // Tasks the generator makes are the same with or without a task added through a command: the
+  // command takes no draw from the generator's random numbers.
   const auto generated = [](bool withCommand) {
     Simulation sim = warehousesim::simulation::makeDemoSimulation(7);
     if (withCommand) {
@@ -317,7 +318,7 @@ TEST(CommandsTest, TaskCommandsDoNotDisturbTheRandomTaskStream) {
     std::vector<std::string> made;
     for (const auto& task : sim.tasks().all()) {
       if (withCommand && task.id.value == 1) {
-        continue;  // the one added by hand
+        continue;  // the one added through a command
       }
       made.push_back(std::to_string(task.pickup.x) + "," + std::to_string(task.pickup.y) + ">" +
                      std::to_string(task.dropoff.x) + "," + std::to_string(task.dropoff.y) + " " +

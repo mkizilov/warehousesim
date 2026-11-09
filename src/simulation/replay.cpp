@@ -184,7 +184,7 @@ class Replay {
 
   void diverge(core::Tick tick, std::string what) {
     if (recording_.engineRevision != kEngineRevision) {
-      what += " (the recording was made by engine revision " +
+      what += " (the recording is from engine revision " +
               std::to_string(recording_.engineRevision) + " and this is revision " +
               std::to_string(kEngineRevision) + ", so a difference is to be expected)";
     }

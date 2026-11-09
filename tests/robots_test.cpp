@@ -41,7 +41,7 @@ Point P(int x, int y) { return Point{x, y}; }
 RobotId R(std::uint32_t id) { return RobotId{id}; }
 TaskId T(std::uint32_t id) { return TaskId{id}; }
 
-// A small battery with round numbers so expected levels can be computed by hand.
+// A small battery with round numbers so expected levels can be computed manually.
 RobotSpec energySpec() {
   RobotSpec spec;
   spec.batteryCapacity = 1000;

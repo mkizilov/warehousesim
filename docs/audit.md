@@ -8,7 +8,7 @@ whole suite under AddressSanitizer + UBSan (with the float checks, no recovery) 
 running clang-tidy over every target; and a new tool, `simulation::InvariantAuditor`, that checks a running
 simulation after every step ([`--audit`](user-guide.md#checking-a-run)). The auditor was run over 333
 scenario runs (666 333 states) and in the test suite. An audit that finds nothing proves little, so the
-rules of the auditor were each tested on hand-built states that break them
+rules of the auditor were each tested on states, built directly in the tests, that break them
 (`tests/audit_test.cpp`), and the one regression test of the double-move defect below was shown red against
 the unfixed engine before it went green.
 

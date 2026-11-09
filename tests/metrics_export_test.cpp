@@ -50,7 +50,7 @@ std::vector<std::string> lines(const std::string& text) {
 }
 
 // A run of two robots over one simulated hour at 1 s a tick, with round numbers so that every
-// figure can be checked by hand.
+// figure can be checked manually.
 FleetMetrics oneHour() {
   FleetMetrics m;
   m.ticks = 3600;

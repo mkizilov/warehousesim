@@ -261,7 +261,7 @@ TEST(RunnerCommandsTest, AResetRunLeadsToTheSameStateAsAFreshRunOfTheSameSeed) {
   SimulationRunner runner(warehousesim::simulation::makeDemoSimulation(5), milliseconds(1), demo());
   runner.start(40);
   ASSERT_TRUE(runner.waitForTick(40, kTimeout));
-  // A hand-made task in the first run must leave nothing behind in the second.
+  // A manually submitted task in the first run must leave nothing behind in the second.
   ASSERT_TRUE(runner.post(SubmitTask{P(0, 5), P(0, 11), TaskPriority::Urgent}));
   ASSERT_TRUE(runner.post(ResetScenario{}));
   for (int i = 0; i < 4000 && runner.frame().epoch == 0; ++i) {

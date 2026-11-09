@@ -40,7 +40,7 @@ namespace warehousesim::testing {
 }
 
 // A perfect maze (every two open cells joined by exactly one route) on a grid of
-// (2 * cellsWide + 1) x (2 * cellsHigh + 1) cells, built by randomised depth-first search. The
+// (2 * cellsWide + 1) x (2 * cellsHigh + 1) cells, built with a randomised depth-first search. The
 // open "rooms" are the cells at odd coordinates; (1, 1) is the top-left room.
 [[nodiscard]] inline world::Warehouse makeMaze(std::int32_t cellsWide, std::int32_t cellsHigh,
                                                core::Rng& rng) {

@@ -251,7 +251,8 @@ int main(int argc, char** argv) {
 
     if (!writeBaseline.empty()) {
       std::ofstream out(writeBaseline, std::ios::trunc);
-      out << "# Written by warehousesim_regression_bench --write-baseline. Behaviour is exact; "
+      out << "# Regenerate with warehousesim_regression_bench --write-baseline. Behaviour is "
+             "exact; "
              "the\n"
              "# last column is heap allocations per step (0 when it could not be counted).\n"
              "# scenario completed failed searches work checksum allocations\n";

@@ -101,9 +101,9 @@ class CooperativeRouter {
     planning::PathPlanner& tailPlanner;
     const planning::BlockedSet& avoid;
     CooperativeRouterOptions options;
-    // If set, the cells to avoid are made by calling this, when (and only if) a plan falls short of
-    // the destination and needs them, instead of being taken from `avoid`. Making the set can cost
-    // more than the search it is for.
+    // If set, the cells to avoid are obtained by calling this, when (and only if) a plan falls
+    // short of the destination and needs them, instead of being taken from `avoid`. Making the set
+    // can cost more than the search it is for.
     const std::function<planning::BlockedSet()>* avoidLater = nullptr;
   };
 

@@ -12,7 +12,7 @@
 // What the metrics are told about a running simulation, as plain data. The metrics module knows
 // nothing about the simulation itself: an adapter (simulation::MetricsCollector) turns the
 // simulation into these observations after every step, and MetricsAccumulator only ever sees them.
-// That keeps the aggregation testable with hand-made observations, including ones a real
+// That keeps the aggregation testable with directly constructed observations, including ones a real
 // simulation never produces (two robots in one cell).
 //
 // Everything measured is *simulated*: ticks of a model, cells of a grid and units of an abstract

@@ -29,7 +29,7 @@ namespace warehousesim::simulation {
 
 // What the engine computes, as a number. It is raised on purpose, in the same change, whenever a
 // change to the simulation alters what a scenario does (the pinned checksum in the replay tests
-// then changes too). A recording made by another revision may well diverge from its replay, and
+// then changes too). A recording from another revision may well diverge from its replay, and
 // says so when it does.
 //   1: the first release candidate.
 //   2: a robot that had taken its step is no longer pushed aside in the same step (it moved two
@@ -93,9 +93,9 @@ struct Recording {
   core::Tick ticks = 0;                                   // steps taken
   core::Tick checkpointInterval = 0;  // ticks between checkpoints; 0: only the first and the end
   std::vector<RecordedCommand> commands;
-  // What the run did to tasks. False for a recording that does not say (a file made by hand, that
-  // leaves them out): then taskEvents is empty, and the tasks a replay makes are not compared with
-  // anything. True with an empty list is a run in which no task was made or cancelled.
+  // What the run did to tasks. False for a recording that does not say (a file written manually,
+  // that leaves them out): then taskEvents is empty, and the tasks a replay makes are not compared
+  // with anything. True with an empty list is a run in which no task was made or cancelled.
   bool taskEventsRecorded = true;
   std::vector<TaskEvent> taskEvents;
   std::vector<Checkpoint> checkpoints;  // ticks ascending; the first is tick 0 in a recorded run

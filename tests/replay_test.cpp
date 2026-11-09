@@ -132,7 +132,7 @@ TEST(ReplayTest, HowTheReplayIsMeasuredNeverChangesWhatItComputes) {
 }
 
 TEST(ReplayTest, AReplayIsTheRunItselfNotAnApproximationOfIt) {
-  // Checked independently of the recorder: build the same simulation by hand, apply the same
+  // Checked independently of the recorder: build the same simulation directly, apply the same
   // commands at the same ticks, and step.
   const Recording recording = busyRecording("compact", 8, 130, 30);
   Simulation by_hand(recording.scenario);
@@ -422,7 +422,7 @@ TEST(ReplayDivergenceTest, ARecordingOfAnotherEngineSaysSoWhenItDiverges) {
   ASSERT_FALSE(result.ok());
   EXPECT_TRUE(mentions(
       result,
-      "made by engine revision 0 and this is revision 2, so a difference is to be expected"))
+      "is from engine revision 0 and this is revision 2, so a difference is to be expected"))
       << result.divergence->what;
   // And one of another revision that still replays exactly is not accused of anything.
   Recording fine = honest();
@@ -457,10 +457,10 @@ TEST(ReplayDivergenceTest, AScenarioThatCannotBeBuiltIsSaidSoNotThrown) {
 
 // ---- a recording made earlier -------------------------------------------------------------------
 
-// Made by this program (compact layout, seed 3, 90 ticks, commands of every kind) when replay was
-// written, and kept as it was. It must go on replaying to the same checksums, and go on being read
-// and written as the same text. If it stops, either the engine changed what a simulation does (then
-// make a new one, raise kEngineRevision and update ThePinnedScenarioHasThePinnedChecksums in
+// Recorded with this program (compact layout, seed 3, 90 ticks, commands of every kind) when replay
+// was written, and kept as it was. It must go on replaying to the same checksums, and go on being
+// read and written as the same text. If it stops, either the engine changed what a simulation does
+// (then make a new one, raise kEngineRevision and update ThePinnedScenarioHasThePinnedChecksums in
 // state_checksum_test.cpp, in the same change) or the format changed (then it needs a new version).
 const char* const kEarlierRecording = R"({
   "format": "warehousesim-recording",

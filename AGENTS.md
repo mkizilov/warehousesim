@@ -198,7 +198,7 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   `ScenarioOptions` (unset must stay exactly the legacy fleet: `NoOptionsIsExactlyTheScenarioAsItAlwaysWas`),
   and the task stream depends on the seed alone so that fleets are offered the same work. When the baseline
   table in the README is regenerated, regenerate all of it with the same command and say what it was
-  built with; never edit a number by hand.
+  built with; never edit a number manually.
 - A run is a function of its `ScenarioSpec` (`Simulation::origin()`) and the `Command`s applied to it, each
   after a whole number of steps. A recording (`recording.hpp`) is that plus the task events and a state
   checksum every so often, and `replay()` plays it back from tick 0 and reports the first difference. Keep
