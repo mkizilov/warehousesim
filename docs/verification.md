@@ -20,21 +20,24 @@ The local checks ran on fresh clones (a clean checkout, with nothing left over f
 platform: **macOS 27.2 on Apple M4 (arm64)**, Apple clang 21.0.0 with libc++, CMake 3.31.6, Ninja 1.11.1,
 clang-format 21.1.8 and clang-tidy 21.1.6 (the pinned versions in `.venv`), with real GoogleTest 1.17.0,
 nlohmann_json 3.12.0 and SDL3 3.2.0 fetched by CMake. At most two workers were used, and every test ran under
-the 900 s limit of the test presets. Rows marked † were last run on commit `bc58d15`; all the others on
-`77518c8`. The two differ in the types of some literals, a renamed enumerator, three string copies, an
-`if constexpr` (the GCC and MSVC fixes below), the macOS runner label, the license file, the leak script and
-documents: no behaviour, which the unchanged results back up (the same 1 538 tests, the same regression
-baseline, the same campaign totals).
+the 900 s limit of the test presets. Rows marked † were last run on commit `bc58d15`; the formatting, Debug,
+Release, AddressSanitizer and regression gate rows on `ca4803e`; the rest (clang-tidy, the campaign, the
+archive) on `77518c8`. From `77518c8` to `ca4803e` only tests, `.gitattributes` and documents changed (nothing
+under `src`, `apps`, `bench`, `cmake` or `.github`), so those rows stand. From `bc58d15` to `77518c8` the
+changes were the types of some literals, a renamed enumerator, three string copies, an `if constexpr` (the GCC
+and MSVC fixes below), the macOS runner label, the license file, the leak script and documents: no behaviour,
+which the unchanged results back up (the same 1 538 tests, the same regression baseline, the same campaign
+totals).
 
 Hosted runners are a separate platform and are covered under Hosted CI below.
 
 | Check | Result |
 |---|---|
 | `clang-format --dry-run --Werror` over 217 files in `src apps tests bench testing` | 0 violations |
-| `cmake --preset default` (Debug, GUI, real SDL3), build, `ctest --preset default -j2` | **1 538 of 1 538** pass in 76 s; project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings |
+| `cmake --preset default` (Debug, GUI, real SDL3), build, `ctest --preset default -j2` | **1 538 of 1 538** pass in 75 s; project code compiles with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Werror` and no warnings |
 | `cmake --preset release` (`-O3`, link-time optimisation), build, `ctest --preset release -j2` | **1 538 of 1 538** pass in 9 s; no warnings in project code (the SDL3 and GoogleTest sources produce a few of their own) |
-| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 246 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
-| `ctest --preset tsan -j2` (ThreadSanitizer) † | **1 533 of 1 533** pass in 617 s, 0 ThreadSanitizer reports |
+| `ctest --preset asan -j2` (AddressSanitizer, UBSan, `float-divide-by-zero`, `float-cast-overflow`, no recovery) | **1 533 of 1 533** pass in 245 s, 0 reports. The five allocation-counting tests are not built under sanitizers, hence 1 533 |
+| `ctest --preset tsan -j2` (ThreadSanitizer) † | **1 533 of 1 533** pass in 617 s, 0 ThreadSanitizer reports. On `ca4803e` the 145 tests of the threaded and end-to-end groups (`-R 'Runner\|Recording\|Replay\|PlanningThreads\|EndToEnd'`, which holds the changed runner test) pass in 228 s, 0 reports |
 | `cmake --preset tidy`, then build (clang-tidy on every project target, warnings are errors) | builds with exit 0; clang-tidy ran in 67 compile steps (`--warnings-as-errors=*`), **0 findings** in project code |
 | `warehousesim_regression_bench` against `bench/regression_baseline.txt` | 5 of 5 scenarios identical (done, failed, search work, state checksum, allocations) |
 | `scripts/campaign.py` (10 layouts x fleets 1, 4, 16, 64 x 3 loads x 3 seeds, 2 000 ticks, every run `--audit`) | 333 runs audited, **666 333 states, 0 violations**; 27 further runs refused because the layout has no room for the fleet. The totals (32 214 tasks done, 3 507 failed, 12 883 given up, 66 669 rings detected) are the same as in every earlier run of this tree |
