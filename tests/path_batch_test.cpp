@@ -141,7 +141,7 @@ TEST(PathBatchTest, WithoutKeepPathsTheLengthIsKnownAndNoRouteIsKept) {
       EXPECT_TRUE(got[i].status == want[i].status);
       EXPECT_EQ(got[i].cost, want[i].cost);
       EXPECT_EQ(got[i].path.empty(), !keep || want[i].path.empty()) << "keep " << keep;
-      kept += got[i].path.empty() ? 0 : 1;
+      kept += got[i].path.empty() ? 0U : 1U;
     }
     EXPECT_EQ(kept == 0, !keep);
   }

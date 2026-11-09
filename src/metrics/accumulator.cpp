@@ -152,8 +152,8 @@ void MetricsAccumulator::add(const TickObservation& observation) {
     if (robot.activity != Activity::Unavailable) {
       ++window_.service;
     }
-    window_.busy += isBusy(robot.activity) ? 1 : 0;
-    window_.waiting += robot.activity == Activity::Waiting ? 1 : 0;
+    window_.busy += isBusy(robot.activity) ? 1U : 0U;
+    window_.waiting += robot.activity == Activity::Waiting ? 1U : 0U;
   }
 
   for (const TaskEnding& ending : observation.tasksEnded) {

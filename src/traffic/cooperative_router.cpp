@@ -81,7 +81,7 @@ RouteFollow followRoute(const planning::SpaceTimeConstraints& free, Point start,
     if (depth == window) {
       break;
     }
-    std::fill(next.begin(), next.end(), 0);
+    std::fill(next.begin(), next.end(), char{0});
     bool any = false;
     const Tick step = startStep + depth;
     for (std::size_t i = 0; i <= last; ++i) {

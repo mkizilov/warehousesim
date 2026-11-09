@@ -48,7 +48,7 @@ std::vector<std::string> rows(const std::string& table) {
 std::size_t countBars(const std::string& line) {
   std::size_t bars = 0;
   for (const char c : line) {
-    bars += c == '|' ? 1 : 0;
+    bars += c == '|' ? 1U : 0U;
   }
   return bars;
 }

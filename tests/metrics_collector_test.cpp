@@ -239,8 +239,8 @@ TEST(MetricsCollectorTest, ALongWaitIsOneConflictPreventedAndManyTicksOfWaitingT
     collector.observe(sim);
     const auto snapshot = sim.snapshot();
     for (const auto& robot : sim.robots()) {
-      refused += sim.heldBack(robot.id()) ? 1 : 0;
-      waitingInSnapshot += snapshot.robots[robot.id().value - 1].waiting ? 1 : 0;
+      refused += sim.heldBack(robot.id()) ? 1U : 0U;
+      waitingInSnapshot += snapshot.robots[robot.id().value - 1].waiting ? 1U : 0U;
     }
   });
   const FleetMetrics& m = collector.report();
@@ -288,7 +288,7 @@ std::vector<std::uint64_t> stepCountingWaits(Simulation& sim, MetricsCollector& 
     collector.observe(sim);
     for (std::size_t i = 0; i < sim.robots().size(); ++i) {
       const bool now = heldByARobot(sim, i);
-      begun[i] += now && !before[i] ? 1 : 0;
+      begun[i] += now && !before[i] ? 1U : 0U;
       before[i] = now;
     }
   }
@@ -373,8 +373,8 @@ TEST(MetricsCollectorTest, ARobotOnAChargerIsChargingNotIdleAndAnIdleOneIsNotCha
   for (int i = 0; i < 15; ++i) {
     sim.step();
     collector.observe(sim);
-    charging += sim.robots()[0].state() == RobotState::Charging ? 1 : 0;
-    idle += sim.robots()[0].state() == RobotState::Idle ? 1 : 0;
+    charging += sim.robots()[0].state() == RobotState::Charging ? 1U : 0U;
+    idle += sim.robots()[0].state() == RobotState::Idle ? 1U : 0U;
   }
   ASSERT_GT(charging, 5U);  // charged up from a low battery,
   ASSERT_GT(idle, 0U);      // and then stood idle

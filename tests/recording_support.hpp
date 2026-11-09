@@ -55,7 +55,7 @@ inline std::vector<std::string> bundledLayouts() {
 inline std::vector<std::size_t> acceptedByKind(const Recording& recording) {
   std::vector<std::size_t> counts(std::variant_size_v<Command>, 0);
   for (const auto& entry : recording.commands) {
-    counts[entry.command.index()] += entry.accepted ? 1 : 0;
+    counts[entry.command.index()] += entry.accepted ? 1U : 0U;
   }
   return counts;
 }

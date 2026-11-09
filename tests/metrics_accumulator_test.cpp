@@ -312,7 +312,7 @@ TEST(MetricsAccumulatorTest, EnergyIsEstimatedFromTheTimeBudgetAndTheDistanceWit
                              Activity::Handling, Activity::Moving,   Activity::Charging};
   std::uint64_t cells = 0;
   for (Tick t = 0; t < 9; ++t) {
-    cells += script[t] == Activity::Moving ? 5 : 0;
+    cells += script[t] == Activity::Moving ? 5U : 0U;
     std::vector<RobotObservation> robots = fleet(1, script[t]);
     robots[0].cellsTravelled = cells;
     acc.add(observation(

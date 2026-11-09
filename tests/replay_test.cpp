@@ -395,7 +395,7 @@ TEST(ReplayDivergenceTest, ATaskTheReplayDoesNotMakeIsFoundWhereItShouldHaveBeen
   // Numbered as the next task, so that the recording is consistent with itself.
   std::uint32_t created = 0;
   for (const TaskEvent& event : recording.taskEvents) {
-    created += event.kind == TaskEventKind::Created ? 1 : 0;
+    created += event.kind == TaskEventKind::Created ? 1U : 0U;
   }
   invented.task = TaskId{created + 1};
   invented.pickup = P(1, 1);
@@ -655,7 +655,7 @@ TEST(ReplayPropertyTest, AnyRecordingAtAllReplaysWithoutThrowingWhateverItSays) 
     options.verify = rng.below(2) == 0;
     ReplayResult result;
     ASSERT_NO_THROW(result = replay(recording, options)) << "round " << round;
-    built += result.ticks > 0 ? 1 : 0;
+    built += result.ticks > 0 ? 1U : 0U;
     if (!result.ok()) {
       EXPECT_FALSE(result.divergence->what.empty());
     }

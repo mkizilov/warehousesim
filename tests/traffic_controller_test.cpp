@@ -493,7 +493,7 @@ TEST(TrafficControllerTest, VehiclesThatNeedRoomToBrakeReserveTheCellsAheadOfThe
   for (Step step = 0; step < 20; ++step) {
     std::size_t held = 0;
     for (const auto& [cell, owner] : controller.table().occupiedAt(step)) {
-      held += owner == R(1) ? 1 : 0;
+      held += owner == R(1) ? 1U : 0U;
     }
     widest = std::max(widest, held);
   }

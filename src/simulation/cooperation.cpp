@@ -93,8 +93,8 @@ traffic::TrafficPlan Simulation::cooperate(Robot& robot, const traffic::TrafficP
       workScale_[i] = 1;
       ++replans_;
       ++planningStats_.reroutes;
-      planningStats_.dodges += outcome.dodge ? 1 : 0;
-      planningStats_.partialPlans += outcome.partial ? 1 : 0;
+      planningStats_.dodges += outcome.dodge ? 1U : 0U;
+      planningStats_.partialPlans += outcome.partial ? 1U : 0U;
       return traffic_.replan(robot);
     case traffic::RouteOutcomeKind::OutOfBudget:
       // It needed more than this much: next time it may use twice as much, if the step has it.
@@ -159,7 +159,7 @@ void Simulation::supervise() {
   for (const auto& ring : rings) {
     const bool known =
         std::find(ringsLastStep_.begin(), ringsLastStep_.end(), ring) != ringsLastStep_.end();
-    planningStats_.deadlocks += known ? 0 : 1;
+    planningStats_.deadlocks += known ? 0U : 1U;
     std::uint32_t stuck = progress_.stuckTicks(ring.front());
     for (const RobotId member : ring) {
       stuck = std::min(stuck, progress_.stuckTicks(member));
