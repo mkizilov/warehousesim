@@ -195,6 +195,8 @@ bool asBool(const Json& value, const std::string& path) {
   return value.get<bool>();
 }
 
+// The result refers into `value`; `path` only words the message. Copy the result when `path` is
+// built in the call: the compiler cannot tell it does not refer into that temporary.
 const std::string& asText(const Json& value, const std::string& path) {
   if (!value.is_string()) {
     reject(path, "must be text, not " + describe(value));
@@ -511,7 +513,7 @@ RecordedCommand readCommand(const Json& value, const std::string& path) {
   if (kind == value.end()) {
     reject(join(path, "command"), "required");
   }
-  const std::string& name = asText(*kind, join(path, "command"));
+  const std::string name = asText(*kind, join(path, "command"));
 
   RecordedCommand entry;
   const auto header = [&entry](const Object& object) {
@@ -571,7 +573,7 @@ TaskEvent readTaskEvent(const Json& value, const std::string& path) {
   if (kind == value.end()) {
     reject(join(path, "event"), "required");
   }
-  const std::string& name = asText(*kind, join(path, "event"));
+  const std::string name = asText(*kind, join(path, "event"));
   if (name != "created" && name != "cancelled") {
     reject(join(path, "event"), "must be created or cancelled, not \"" + name.substr(0, 40) + "\"");
   }
@@ -586,7 +588,7 @@ TaskEvent readTaskEvent(const Json& value, const std::string& path) {
   std::uint32_t task = 0;
   readUnsigned(object, "task", task);
   event.task = core::TaskId{task};
-  const std::string& source = asText(object.need("source"), object.at("source"));
+  const std::string source = asText(object.need("source"), object.at("source"));
   if (source != "command" && source != "engine") {
     reject(object.at("source"), "must be command or engine, not \"" + source.substr(0, 40) + "\"");
   }
