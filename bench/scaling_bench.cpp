@@ -327,6 +327,7 @@ void measureBatches(const Options& options, Failures& failures) {
        {std::size_t{16}, std::size_t{64}, std::size_t{256}, std::size_t{1024}}) {
     warehousesim::core::Rng rng(options.seed + size);
     std::vector<PathQuery> queries;
+    queries.reserve(size);
     for (std::size_t i = 0; i < size; ++i) {
       queries.push_back(
           {walkable[rng.below(walkable.size())], walkable[rng.below(walkable.size())]});

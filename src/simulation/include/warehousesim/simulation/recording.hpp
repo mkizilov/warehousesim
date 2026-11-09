@@ -31,7 +31,10 @@ namespace warehousesim::simulation {
 // change to the simulation alters what a scenario does (the pinned checksum in the replay tests
 // then changes too). A recording made by another revision may well diverge from its replay, and
 // says so when it does.
-inline constexpr int kEngineRevision = 1;
+//   1: the first release candidate.
+//   2: a robot that had taken its step is no longer pushed aside in the same step (it moved two
+//      cells in one tick); found by the audit, it changes only runs in which that happened.
+inline constexpr int kEngineRevision = 2;
 
 // Ticks between the checksums a recording keeps, unless asked otherwise.
 inline constexpr core::Tick kDefaultCheckpointInterval = 100;

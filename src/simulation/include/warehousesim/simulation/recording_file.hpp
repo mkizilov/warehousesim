@@ -63,7 +63,7 @@ namespace warehousesim::simulation {
 inline constexpr std::string_view kRecordingFormatName = "warehousesim-recording";
 inline constexpr int kRecordingFormatVersion = 1;
 // A run of a million steps with a task every five and a few commands takes about 30 MB.
-inline constexpr std::size_t kMaxRecordingFileBytes = 64U * 1024U * 1024U;
+inline constexpr std::size_t kMaxRecordingFileBytes = std::size_t{64} * 1024 * 1024;
 // Document, section, list, entry, pair: the schema never goes deeper than 5; one more is allowed so
 // that the error says what is wrong instead of the nesting being the error.
 inline constexpr int kMaxRecordingNesting = 6;

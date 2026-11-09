@@ -167,7 +167,7 @@ void FleetController::choosePriority(TaskPriority priority, FleetOutput& out) {
     setMessage(taskText(task->id) + " is already " + tasks::toString(priority), false);
     return;
   }
-  out.commands.push_back(simulation::SetTaskPriority{task->id, priority});
+  out.commands.emplace_back(simulation::SetTaskPriority{task->id, priority});
   setMessage(taskText(task->id) + ": asking for " + tasks::toString(priority), false);
 }
 
@@ -176,6 +176,7 @@ void FleetController::handleKey(FleetKey key, FleetOutput& out) {
     case FleetKey::NextRobot:
     case FleetKey::PreviousRobot: {
       std::vector<core::RobotId> ids;
+      ids.reserve(robots_.size());
       for (const RobotMark& robot : robots_) {
         ids.push_back(robot.id);
       }
@@ -185,6 +186,7 @@ void FleetController::handleKey(FleetKey key, FleetOutput& out) {
     case FleetKey::NextTask:
     case FleetKey::PreviousTask: {
       std::vector<core::TaskId> ids;
+      ids.reserve(lists_.active.size() + lists_.finished.size());
       for (const Task& task : lists_.active) {
         ids.push_back(task.id);
       }
@@ -206,7 +208,7 @@ void FleetController::handleKey(FleetKey key, FleetOutput& out) {
       choosePriority(priorityOf(key), out);
       break;
     case FleetKey::Reset:
-      out.commands.push_back(simulation::ResetScenario{});
+      out.commands.emplace_back(simulation::ResetScenario{});
       setMessage("restarting the scenario", false);
       break;
     case FleetKey::ToggleMetrics:
@@ -270,7 +272,7 @@ void FleetController::clickMap(Point cell, FleetOutput& out) {
     setMessage("the dropoff must be another cell than the pickup " + cellText(cell), true);
     return;
   }
-  out.commands.push_back(simulation::SubmitTask{*pickup_, cell, newPriority_});
+  out.commands.emplace_back(simulation::SubmitTask{*pickup_, cell, newPriority_});
   setMessage("sending the task " + cellText(*pickup_) + " to " + cellText(cell), false);
   entry_ = TaskEntry::None;
   pickup_.reset();

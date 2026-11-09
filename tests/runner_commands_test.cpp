@@ -17,6 +17,7 @@
 #include "warehousesim/simulation/runner.hpp"
 #include "warehousesim/simulation/scenarios.hpp"
 #include "warehousesim/simulation/serialization.hpp"
+#include "warehousesim/world/cell_type.hpp"
 
 namespace {
 
@@ -328,6 +329,49 @@ TEST(RunnerCommandsTest, AScenarioThatBuildsAnotherLayoutIsNotUsed) {
   EXPECT_FALSE(log[0].outcome.accepted);
   EXPECT_TRUE(log[0].outcome.message.find("another layout") != std::string::npos);
   EXPECT_EQ(runner.warehouse().width(), 20);
+  runner.stop();
+}
+
+// PlaceObstacle and ClearObstacle change the layout of the simulation, so the layout the runner
+// reports has to follow: whatever draws from it would otherwise show robots driving through a wall.
+TEST(RunnerCommandsTest, TheRunnersLayoutFollowsObstaclesPutUpAndTakenDownAndARestartUndoesThem) {
+  using warehousesim::core::Point;
+  using warehousesim::world::CellType;
+  SimulationRunner runner(warehousesim::simulation::makeDemoSimulation(1), milliseconds(1), demo());
+  const Point cell{10, 6};
+  ASSERT_EQ(runner.warehouse().at(cell), CellType::Free);
+  runner.setPaused(true);  // nothing moves, so nothing holds the cell when the command comes
+  runner.start();
+
+  const auto applied = [&](std::size_t count) {
+    for (int i = 0; i < 4000 && runner.commandLog().size() < count; ++i) {
+      std::this_thread::sleep_for(milliseconds(1));
+    }
+    return runner.commandLog();
+  };
+  ASSERT_TRUE(runner.post(warehousesim::simulation::PlaceObstacle{cell, CellType::Wall}));
+  auto log = applied(1);
+  ASSERT_EQ(log.size(), 1U);
+  ASSERT_TRUE(log[0].outcome.accepted) << log[0].outcome.message;
+  EXPECT_EQ(runner.warehouse().at(cell), CellType::Wall);
+
+  ASSERT_TRUE(runner.post(warehousesim::simulation::ClearObstacle{cell}));
+  log = applied(2);
+  ASSERT_EQ(log.size(), 2U);
+  ASSERT_TRUE(log[1].outcome.accepted) << log[1].outcome.message;
+  EXPECT_EQ(runner.warehouse().at(cell), CellType::Free);
+
+  ASSERT_TRUE(runner.post(warehousesim::simulation::PlaceObstacle{cell, CellType::Shelf}));
+  ASSERT_EQ(applied(3).size(), 3U);
+  ASSERT_EQ(runner.warehouse().at(cell), CellType::Shelf);
+  ASSERT_TRUE(runner.post(ResetScenario{}));
+  for (int i = 0; i < 4000 && runner.frame().epoch == 0; ++i) {
+    std::this_thread::sleep_for(milliseconds(1));
+  }
+  log = runner.commandLog();
+  ASSERT_EQ(log.size(), 1U) << "a restart starts the record over";
+  EXPECT_TRUE(log[0].outcome.accepted) << "the original layout is what a restart builds";
+  EXPECT_EQ(runner.warehouse().at(cell), CellType::Free);
   runner.stop();
 }
 

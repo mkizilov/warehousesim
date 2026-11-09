@@ -46,12 +46,16 @@ void printUsage(std::ostream& out) {
       << " (default 20 x 12)\n"
          "  --fps N        frame rate cap, 1 to 1000 (default 60)\n"
          "  --frames N     exit after N rendered frames (0 = run until closed)\n"
+         "  --version      print the version and exit\n"
          "  The options other than --file, --fps and --frames only apply to a new map.\n";
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (warehousesim::apps::printsVersion(argc, argv, "warehousesim_editor", std::cout)) {
+    return 0;
+  }
   std::string file = kDefaultFile;
   std::string layout;
   std::uint64_t width = 20;

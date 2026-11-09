@@ -1,0 +1,54 @@
+name: Release
+
+# Builds, tests and packages the release configuration when a version tag is pushed (or on demand),
+# and keeps the packages as workflow artifacts. Publishing them is a separate, deliberate step.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+  CTEST_PARALLEL_LEVEL: 2
+
+jobs:
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-dev libxext-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libxkbcommon-dev libgl1-mesa-dev
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+      - name: Check that the tag is the version in CMakeLists.txt
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(sed -n 's/^  VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} but CMakeLists.txt says $version"; exit 1; }
+      - run: cmake --preset release
+      - run: cmake --build --preset release
+      - run: ctest --preset release
+      - name: Performance regression gate
+        run: build/release/bench/warehousesim_regression_bench
+      - run: cmake --build --preset package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: warehousesim-${{ matrix.os }}
+          path: build/release/warehousesim-*.tar.gz
+          if-no-files-found: error

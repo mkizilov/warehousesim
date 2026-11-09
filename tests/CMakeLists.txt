@@ -110,6 +110,7 @@ warehousesim_add_test(warehousesim_task_tests
 # when WAREHOUSESIM_BUILD_GUI is OFF.
 warehousesim_add_test(warehousesim_tests
   SOURCES
+    audit_test.cpp
     camera_test.cpp
     benchmark_test.cpp
     collision_avoidance_test.cpp
@@ -117,6 +118,7 @@ warehousesim_add_test(warehousesim_tests
     cooperative_planning_test.cpp
     editor_controller_test.cpp
     editor_scene_test.cpp
+    end_to_end_test.cpp
     fleet_controller_test.cpp
     fleet_layout_test.cpp
     fleet_scene_test.cpp
@@ -126,6 +128,7 @@ warehousesim_add_test(warehousesim_tests
     metrics_collector_test.cpp
     movement_test.cpp
     planning_threads_test.cpp
+    random_worlds_test.cpp
     recording_file_test.cpp
     recording_test.cpp
     replay_test.cpp
@@ -139,7 +142,10 @@ warehousesim_add_test(warehousesim_tests
     simulation_test.cpp
     state_checksum_test.cpp
     view_controller_test.cpp
-  LIBS warehousesim::view warehousesim::simulation warehousesim::mapio)
+  LIBS warehousesim::view warehousesim::simulation warehousesim::mapio warehousesim::testing)
+# The example maps are read (never written) by the end-to-end tests.
+target_compile_definitions(warehousesim_tests PRIVATE
+  WAREHOUSESIM_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
 
 # The simulation must run with no window, display or SDL: the CLI does not link any of them.
 add_test(NAME headless_cli_all_layouts

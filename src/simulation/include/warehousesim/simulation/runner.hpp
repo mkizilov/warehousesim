@@ -124,8 +124,9 @@ class SimulationRunner {
   // Blocks until a snapshot at or beyond `tick` is published; false on timeout.
   [[nodiscard]] bool waitForTick(core::Tick tick, std::chrono::milliseconds timeout) const;
 
-  // The layout never changes after construction, so this is safe to read from any thread.
-  [[nodiscard]] const world::Warehouse& warehouse() const noexcept { return warehouse_; }
+  // The layout as it is now, as a copy (PlaceObstacle and ClearObstacle commands change it while
+  // the run goes on). Safe to ask from any thread.
+  [[nodiscard]] world::Warehouse warehouse() const;
 
  private:
   void loop();
@@ -137,7 +138,7 @@ class SimulationRunner {
   [[nodiscard]] CommandOutcome restart(const ResetScenario& command);
 
   Simulation simulation_;
-  const world::Warehouse warehouse_;
+  const world::Warehouse originalLayout_;  // what a restart must rebuild
   const ScenarioFactory scenario_;
   const metrics::MetricsOptions metricsOptions_;
   MetricsCollector collector_;

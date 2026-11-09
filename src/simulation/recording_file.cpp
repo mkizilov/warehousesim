@@ -182,11 +182,10 @@ class Object {
   std::string path_;
 };
 
-const Json& asArray(const Json& value, const std::string& path) {
+void requireArray(const Json& value, const std::string& path) {
   if (!value.is_array()) {
     reject(path, "must be a list, not " + describe(value));
   }
-  return value;
 }
 
 bool asBool(const Json& value, const std::string& path) {
@@ -461,7 +460,8 @@ SimulationConfig readConfig(const Json& value, const std::string& path, std::uin
 }
 
 world::Warehouse readLayout(const Json& value, const std::string& path) {
-  const Json& rows = asArray(value, path);
+  requireArray(value, path);
+  const Json& rows = value;
   if (rows.empty() || rows.size() > static_cast<std::size_t>(world::kMaxMapSide)) {
     reject(path, "must have 1 to " + std::to_string(world::kMaxMapSide) + " rows, not " +
                      std::to_string(rows.size()));
@@ -492,7 +492,8 @@ ScenarioSpec readScenario(const Json& value, const std::string& path) {
   const std::uint64_t seed = asUnsigned(object.need("seed"), object.at("seed"), 0,
                                         std::numeric_limits<std::uint64_t>::max());
   scenario.warehouse = readLayout(object.need("layout"), object.at("layout"));
-  const Json& robots = asArray(object.need("robots"), object.at("robots"));
+  const Json& robots = object.need("robots");
+  requireArray(robots, object.at("robots"));
   for (std::size_t i = 0; i < robots.size(); ++i) {
     scenario.robotStarts.push_back(asPoint(robots[i], join(object.at("robots"), i)));
   }
@@ -647,7 +648,8 @@ Recording readRecording(const Json& root) {
   }
   const auto each = [&object](std::string_view key, auto&& read) {
     if (const Json* list = object.find(key)) {
-      const Json& items = asArray(*list, object.at(key));
+      const Json& items = *list;
+      requireArray(items, object.at(key));
       for (std::size_t i = 0; i < items.size(); ++i) {
         read(items[i], join(object.at(key), i));
       }
@@ -812,6 +814,7 @@ std::string serializeRecording(const Recording& recording) {
   out += "  \"ticks\": " + std::to_string(recording.ticks) + ",\n";
   out += "  \"checkpointInterval\": " + std::to_string(recording.checkpointInterval) + ",\n";
   std::vector<Json> items;
+  items.reserve(recording.commands.size());
   for (const RecordedCommand& entry : recording.commands) {
     items.push_back(commandJson(entry));
   }

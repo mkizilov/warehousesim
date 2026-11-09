@@ -31,7 +31,7 @@ Robot::Robot(core::RobotId id, Point position, RobotSpec spec, Direction heading
       position_(position),
       heading_(heading),
       headingAngle_(core::angleOf(heading)),
-      spec_(std::move(spec)),
+      spec_(spec),
       battery_(makeBattery(spec_)) {
   if (!id.valid()) {
     throw std::invalid_argument("robot id must be valid");

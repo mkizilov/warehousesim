@@ -1,6 +1,7 @@
 #include "warehousesim/editor/map_editor.hpp"
 
 #include <cstdlib>
+#include <ranges>
 #include <stdexcept>
 #include <utility>
 
@@ -230,8 +231,8 @@ bool MapEditor::undo() {
   if (step.resized) {
     layout_ = step.resized->first;
   } else {
-    for (auto change = step.changes.rbegin(); change != step.changes.rend(); ++change) {
-      layout_.set(change->cell, change->before);
+    for (const auto& change : std::views::reverse(step.changes)) {
+      layout_.set(change.cell, change.before);
     }
   }
   ++revision_;

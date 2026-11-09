@@ -65,7 +65,9 @@ std::vector<std::vector<RobotId>> ProgressMonitor::deadlocks(std::uint32_t minTi
   std::vector<Mark> marks(stuck_.size(), Mark::Unseen);
   const auto eligible = [&](std::size_t i) { return stuck_[i] > 0 && stuck_[i] >= minTicks; };
 
-  std::vector<std::vector<RobotId>> rings;
+  // A robot is in at most one ring, so a ring can be filed under its lowest member: reading the
+  // files in order then gives the rings in order, without sorting them.
+  std::vector<std::vector<RobotId>> filed(stuck_.size());
   for (std::size_t first = 0; first < stuck_.size(); ++first) {
     if (marks[first] != Mark::Unseen || !eligible(first)) {
       continue;
@@ -87,10 +89,11 @@ std::vector<std::vector<RobotId>> ProgressMonitor::deadlocks(std::uint32_t minTi
         const auto lowest = std::min_element(members.begin(), members.end());
         std::rotate(members.begin(), lowest, members.end());
         std::vector<RobotId> ring;
+        ring.reserve(members.size());
         for (const std::size_t member : members) {
           ring.push_back(RobotId{static_cast<std::uint32_t>(member + 1)});
         }
-        rings.push_back(std::move(ring));
+        filed[members.front()] = std::move(ring);
         break;
       }
       if (marks[target] == Mark::Done) {
@@ -102,8 +105,12 @@ std::vector<std::vector<RobotId>> ProgressMonitor::deadlocks(std::uint32_t minTi
       marks[member] = Mark::Done;
     }
   }
-  std::sort(rings.begin(), rings.end(),
-            [](const auto& a, const auto& b) { return a.front() < b.front(); });
+  std::vector<std::vector<RobotId>> rings;
+  for (std::vector<RobotId>& ring : filed) {
+    if (!ring.empty()) {
+      rings.push_back(std::move(ring));
+    }
+  }
   return rings;
 }
 

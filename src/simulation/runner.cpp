@@ -27,7 +27,7 @@ SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseco
 SimulationRunner::SimulationRunner(Simulation simulation, std::chrono::milliseconds stepDuration,
                                    ScenarioFactory scenario, metrics::MetricsOptions metricsOptions)
     : simulation_(std::move(simulation)),
-      warehouse_(simulation_.warehouse()),
+      originalLayout_(simulation_.warehouse()),
       scenario_(std::move(scenario)),
       metricsOptions_(metricsOptions),
       collector_(simulation_, metricsOptions),
@@ -94,7 +94,7 @@ bool SimulationRunner::post(Command command) {
     if (commands_.size() >= kMaxQueuedCommands) {
       return false;
     }
-    commands_.push_back(std::move(command));
+    commands_.push_back(command);
     ++controlEpoch_;
   }
   wake_.notify_all();
@@ -107,6 +107,11 @@ std::vector<CommandRecord> SimulationRunner::commandLog(std::size_t from) const 
     return {};
   }
   return {log_.begin() + static_cast<std::ptrdiff_t>(from), log_.end()};
+}
+
+world::Warehouse SimulationRunner::warehouse() const {
+  const std::scoped_lock lock(mutex_);
+  return simulation_.warehouse();
 }
 
 std::uint64_t SimulationRunner::seed() const {
@@ -174,7 +179,7 @@ CommandOutcome SimulationRunner::restart(const ResetScenario& command) {
   const std::uint64_t seed = command.seed.value_or(simulation_.config().seed);
   try {
     Simulation fresh = scenario_(seed);
-    if (fresh.warehouse().toRows() != warehouse_.toRows()) {
+    if (fresh.warehouse().toRows() != originalLayout_.toRows()) {
       return {false, "the scenario would build another layout; not restarted", std::nullopt};
     }
     simulation_ = std::move(fresh);
@@ -202,7 +207,7 @@ bool SimulationRunner::applyQueued() {
   }
   bool restarted = false;
   while (!commands_.empty()) {
-    Command command = std::move(commands_.front());
+    const Command command = commands_.front();
     commands_.pop_front();
     CommandOutcome outcome = execute(command);
     if (std::holds_alternative<ResetScenario>(command)) {
@@ -220,7 +225,7 @@ bool SimulationRunner::applyQueued() {
     } else if (journal_) {
       journal_->commandApplied(simulation_, command, outcome.accepted);
     }
-    log_.push_back({simulation_.tick(), std::move(command), std::move(outcome)});
+    log_.push_back({simulation_.tick(), command, std::move(outcome)});
   }
   latest_ = simulation_.snapshot();
   if (restarted) {

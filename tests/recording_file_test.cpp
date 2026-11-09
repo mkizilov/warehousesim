@@ -79,7 +79,7 @@ Recording small() {
 const char* const kSmallText = R"({
   "format": "warehousesim-recording",
   "version": 1,
-  "engine": 1,
+  "engine": 2,
   "scenario": {
     "seed": 42,
     "layout": [

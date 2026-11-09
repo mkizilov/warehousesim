@@ -24,23 +24,44 @@ core ← robots ──────────┴← tasks ┐
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
 | `metrics`    | simulated performance figures from plain observations: aggregation, derived rates, CSV and dashboard text (see Performance metrics); depends on `core` only |
-| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios, `MetricsCollector`, benchmark sweeps, run recording and replay (see Recording and replay) |
+| `simulation` | `Simulation` tick engine, `SimulationRunner` thread with its command queue, JSON, scenarios, `MetricsCollector`, benchmark sweeps, run recording and replay (see Recording and replay), the `InvariantAuditor` behind `--audit` |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing (see Map editor) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize) and its file glue; no SDL, no GUI |
 | `view`       | `Camera`, draw lists (`buildScene()`, `buildFleetScene()`, `buildEditorScene()`), `ViewController`, `FleetController`, `FleetSession`, `EditorController`; no SDL, fully tested |
 | `rendering`  | SDL3 `SdlWindow` (RAII): turns SDL events into `InputEvents`, runs a draw list |
 
+## Documentation
+
+| Document | For |
+|---|---|
+| [docs/user-guide.md](docs/user-guide.md) | running the programs: layouts, maps, fleets and loads, the GUI, recording, auditing |
+| [docs/architecture.md](docs/architecture.md) | the modules, one step of the engine, the algorithms, determinism, limitations, extension points |
+| [docs/developer-guide.md](docs/developer-guide.md) | toolchain, presets, the test tiers, sanitizers, static analysis, benchmarks, CI, releasing |
+| [docs/audit.md](docs/audit.md) | the audit of memory ownership, concurrency, event ordering, collision safety and numerical stability |
+| [docs/benchmarks.md](docs/benchmarks.md) | the final benchmark results and the scenario campaign, with the machine and build they came from |
+| [examples/README.md](examples/README.md) | six example warehouses and what each shows |
+| [CHANGELOG.md](CHANGELOG.md) | what each release added |
+
+The rest of this file is the reference for each part of the simulator.
+
 ## Build
 
 Requires CMake ≥ 3.24, a C++20 compiler and Ninja (or another generator). nlohmann_json, GoogleTest and
-SDL3 are located with `find_package` and otherwise downloaded at pinned versions by `FetchContent`.
+SDL3 are located with `find_package` and otherwise downloaded at pinned versions by `FetchContent` (a
+downloaded SDL3 is linked statically). The tools the project is checked with are pinned in
+[docs/developer-guide.md](docs/developer-guide.md#toolchain) (`cmake` 3.31.6, `ninja` 1.11.1.4,
+`clang-format` 21.1.8, `clang-tidy` 21.1.6) and installed into a project-local `.venv`.
 
 ```sh
 cmake --preset default && cmake --build --preset default && ctest --preset default
 ```
 
-Presets: `default` (Debug, GUI, tests), `release`, `headless` (no SDL3), `asan`, `tsan`, `tidy`.
+Presets: `default` (Debug, GUI, tests), `headless` (no SDL3), `release` (optimised with link-time
+optimisation), `asan` (AddressSanitizer, UBSan and the float checks, no recovery), `tsan`, `tidy`
+(clang-tidy on every target). `cmake --build --preset package` makes the release archive: the programs,
+the example maps and the documents (`cmake --install build/release --prefix DIR` installs the same).
 Building SDL3 from source on Linux needs the X11 development packages (see `.github/workflows/ci.yml`).
+`warehousesim_cli`, `warehousesim_gui` and `warehousesim_editor` all take `--version`.
 
 ## World model
 
@@ -87,7 +108,14 @@ build/default/apps/warehousesim_cli --layout large --robots 100 --spawn 1 --tick
 build/release/bench/warehousesim_scaling_bench                            # wall-clock cost of a step, with and without threads
 build/default/apps/warehousesim_cli --layout compact --ticks 600 --seed 7 --record run.json   # also write down the run
 build/default/apps/warehousesim_cli --replay run.json                    # play it back and check it
+build/default/apps/warehousesim_cli --map examples/cross-dock.json --robots 12 --spawn 3 --ticks 1500 --audit
+build/release/bench/warehousesim_regression_bench                        # the performance gate against its baseline
+python3 scripts/campaign.py build/release/apps/warehousesim_cli          # layouts x fleets x loads x seeds, all audited
 ```
+
+`--audit` checks every step against the invariants in `simulation/audit.hpp` (collision safety, task
+ownership, event order, finite numbers) and exits with 1, listing what, if one is broken. The
+`examples/` directory has six maps to run, edit and learn from.
 
 Both `warehousesim_cli` and `warehousesim_gui` take `--map FILE` instead of `--layout NAME` (not both).
 A map that is missing, invalid or cannot host a simulation is refused with every problem listed and
@@ -403,7 +431,9 @@ that robots mostly never get that far.
   short wait. If the cell is already occupied the older rules apply: the blocker steps aside if it can
   (idle or lower priority), otherwise the robot routes around it, and two robots face to face with a
   blocker that cannot move are sorted out by the one with a free neighbour stepping aside. A robot moved
-  aside has used its step, so no robot ever moves more than a cell per tick.
+  aside has used its step, and a robot that has already taken its step is not moved aside in it, so no
+  robot moves more than a cell per tick (the second half is engine revision 2: the audit found robots
+  that moved twice, see `ARobotThatHasMovedIsNeverPushedAsideInTheSameTick` and docs/audit.md).
 - **Switching it off:** `SimulationConfig::reservations = false` leaves only the physical layer (and the
   deadlock-breaking rules above); the tests use it to show that robots still never collide but meet
   head-on.
@@ -807,9 +837,10 @@ robots draw power in the model (idle drain 1 per tick).
 
 This section is about how long the program takes to compute, not about simulated results: everything in
 it is a wall-clock time or a count of what the program did. The times are from one machine (Apple M4,
-10 hardware threads), built by hand with Apple clang 21 at `-O3 -DNDEBUG` (CMake was not available in the
-sandbox this was written in, so not the CMake Release preset), and are medians of the number of runs
-stated. They say nothing about real robots or other machines; rerun `warehousesim_scaling_bench` on a
+10 hardware threads), built by hand with Apple clang 21 at `-O3 -DNDEBUG` (the figures of this section
+were taken before CMake could be installed; [docs/benchmarks.md](docs/benchmarks.md) has the figures of
+the CMake `release` preset, with link-time optimisation, and says which of these they reproduce), and are
+medians of the number of runs stated. They say nothing about real robots or other machines; rerun `warehousesim_scaling_bench` on a
 Release build to get your own.
 
 ### How it was measured
@@ -1014,7 +1045,6 @@ per step, not two: the state before the last step is the one it already holds.
 - Memory: a space-time planner keeps distance fields for up to 512 goals and 32 MB; `PathDistance` keeps 32
   fields (about 33 MB on a 512x512 map). Before, the estimator kept no fields.
 - The numbers are from one machine, one compiler and a hand-built `-O3`, for two worker threads at most.
-  CMake, the CI jobs and `clang-tidy` could not be run where this was written.
 
 ## Recording and replay
 
@@ -1255,5 +1285,16 @@ accepted with a warning, and tasks between the regions can never be done.
 - Same seed ⇒ same run, bit for bit (`SameSeedIsDeterministic`, and the CLI output hashes match).
 - Layouts in 1-wide corridors can still deadlock if robots need each other's cells and none has a free
   neighbour to step to.
+- Robots that have finished a task stay where they are, and a fleet bigger than the work can use does worse
+  than a smaller one: robots never collide, but a crowd of idle ones near the dropoffs can block the robots
+  still working until a task is given up (after 150 stuck ticks). Measured on `fulfilment`, 16 robots, a
+  task every 25 ticks, 1500 ticks, seed 1: 54 of 60 tasks done, 4 still open, 2 given up
+  (`EndToEndTest.ALightLoadIsMostlyServedAndEveryFailureIsAnExplainedAbandonment`). Across the audited
+  campaign it is much worse on the small halls: 16 robots at a task every 25 ticks did less than 4 in 9 of
+  10 layouts, and 64 robots on `demo` completed 85 tasks against 339 for 16 at heavy load
+  ([docs/benchmarks.md](docs/benchmarks.md#scenario-campaign)). Idle robots by the dropoff row is the
+  likely cause (seen in one run, not isolated by an experiment). A parking behaviour is the first thing to
+  try; it would change what the simulation computes (a new engine revision), so it is not part of this
+  release.
 
 Project rules for contributors and agents are in [AGENTS.md](AGENTS.md).

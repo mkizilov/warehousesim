@@ -422,7 +422,7 @@ TEST(ReplayDivergenceTest, ARecordingOfAnotherEngineSaysSoWhenItDiverges) {
   ASSERT_FALSE(result.ok());
   EXPECT_TRUE(mentions(
       result,
-      "made by engine revision 0 and this is revision 1, so a difference is to be expected"))
+      "made by engine revision 0 and this is revision 2, so a difference is to be expected"))
       << result.divergence->what;
   // And one of another revision that still replays exactly is not accused of anything.
   Recording fine = honest();

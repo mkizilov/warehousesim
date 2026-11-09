@@ -216,7 +216,7 @@ void EditorController::pointerAction(const PointerAction& action) {
         return;  // a second button while one is down, or a click on a ruler or the bar
       }
       const Tool tool = action.button == PointerButton::Primary ? editor_.tool() : Tool::Erase;
-      drag_ = Drag{action.button, tool, *cell};
+      drag_ = Drag{action.button, tool, cell};
       setMessage("", false);
       editor_.beginStroke();
       editor_.paint(*cell, tool);

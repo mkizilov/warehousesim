@@ -62,7 +62,7 @@ metrics::EnergyModel energyModelOf(const Simulation& simulation) {
 }
 
 MetricsCollector::MetricsCollector(const Simulation& simulation, metrics::MetricsOptions options)
-    : accumulator_(std::move(options), [&simulation] {
+    : accumulator_(options, [&simulation] {
         metrics::TickObservation start;
         start.tick = simulation.tick();
         for (const robots::Robot& robot : simulation.robots()) {

@@ -353,6 +353,7 @@ void Simulation::updateRobots() {
     traffic_.beginStep(clock_.tick(), robots_, boosted);
   }
   std::fill(displaced_.begin(), displaced_.end(), false);
+  std::fill(movedThisStep_.begin(), movedThisStep_.end(), false);
   beginPlanning();
   for (const core::RobotId id : boosted) {
     updateRobot(robotById(id));
@@ -603,9 +604,10 @@ void Simulation::syncHolds(Robot& robot) { world_.releaseClaims(robot.id(), robo
 
 // Called once `robot` has waited maxBlockedTicks for `cell`. Priority is the robot id
 // (lower wins). An idle or lower-priority blocker gives way by stepping aside, unless it is
-// busy in place; otherwise the robot is routed around the blocker. Making only one side yield
-// breaks head-on and cyclic standoffs instead of both robots replanning symmetrically forever.
-// Returns true if the blocker moved away.
+// busy in place or has already moved in this step (a sidestep is a whole cell, so a robot that took
+// its own step first would have moved two cells in a tick); otherwise the robot is routed around
+// the blocker. Making only one side yield breaks head-on and cyclic standoffs instead of both
+// robots replanning symmetrically forever. Returns true if the blocker moved away.
 bool Simulation::resolveBlock(Robot& robot, Point cell) {
   const std::optional<core::RobotId> holder = world_.occupantAt(cell);
   if (!holder) {
@@ -617,8 +619,9 @@ bool Simulation::resolveBlock(Robot& robot, Point cell) {
   if (blocker.isCommitted()) {
     return false;
   }
-  const bool blockerYields = !blocker.isStationary() && (blocker.state() == RobotState::Idle ||
-                                                         outranks(robot.id(), blocker.id()));
+  const bool blockerYields =
+      !blocker.isStationary() && !movedThisStep_[blocker.id().value - 1] &&
+      (blocker.state() == RobotState::Idle || outranks(robot.id(), blocker.id()));
   if (blockerYields && stepAside(blocker, &robot)) {
     robot.clearBlocked();
     return true;

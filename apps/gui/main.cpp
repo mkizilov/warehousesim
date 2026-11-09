@@ -45,6 +45,7 @@ void printUsage(std::ostream& out) {
          "                        [--robots N] [--spawn N] [--threads N]\n"
          "                        [--record FILE [--checkpoint-interval N]]\n"
          "  --map FILE   run a map made with warehousesim_editor instead of a layout\n"
+         "  --version    print the version and exit\n"
          "  --robots N   start N robots instead of the layout's usual fleet\n"
          "  --spawn N    a new random task every N ticks (default 5; 0: none)\n"
          "  --threads N  plan routes on N worker threads besides the simulation's (default 0); "
@@ -68,6 +69,9 @@ void printUsage(std::ostream& out) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (warehousesim::apps::printsVersion(argc, argv, "warehousesim_gui", std::cout)) {
+    return 0;
+  }
   std::uint64_t seed = 1;
   std::uint64_t tickMs = 100;
   std::uint64_t fps = 60;

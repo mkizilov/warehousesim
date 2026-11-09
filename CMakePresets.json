@@ -20,9 +20,11 @@
     },
     {
       "name": "asan",
-      "displayName": "Headless with AddressSanitizer and UBSan",
+      "displayName": "Headless with AddressSanitizer, UBSan and the float checks",
       "inherits": "headless",
-      "cacheVariables": { "WAREHOUSESIM_SANITIZE": "address,undefined" }
+      "cacheVariables": {
+        "WAREHOUSESIM_SANITIZE": "address,undefined,float-divide-by-zero,float-cast-overflow"
+      }
     },
     {
       "name": "tsan",
@@ -38,9 +40,12 @@
     },
     {
       "name": "release",
-      "displayName": "Release with GUI and tests",
+      "displayName": "Release (optimised, link-time optimisation) with GUI and tests",
       "inherits": "default",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -49,7 +54,13 @@
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "tidy", "configurePreset": "tidy" },
-    { "name": "release", "configurePreset": "release" }
+    { "name": "release", "configurePreset": "release" },
+    {
+      "name": "package",
+      "displayName": "Release build, then a .tar.gz (or .zip) of programs, examples and docs",
+      "configurePreset": "release",
+      "targets": ["package"]
+    }
   ],
   "testPresets": [
     {
@@ -65,7 +76,8 @@
     {
       "name": "asan",
       "configurePreset": "asan",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "environment": { "UBSAN_OPTIONS": "print_stacktrace=1" }
     },
     {
       "name": "tsan",

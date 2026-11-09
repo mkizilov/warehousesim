@@ -6,6 +6,10 @@
 // With --record FILE the run is also written down so that it can be played again: --replay FILE
 // builds the same simulation from the file, plays it step for step and compares it with the
 // checksums in the file, printing the same final snapshot if nothing differs.
+//
+// With --audit the run is checked after every step against the invariants in audit.hpp (no two
+// robots in one cell, nobody moving through a wall, every task owned by exactly one robot, ...); it
+// says so on stderr and exits with 1 if any was broken.
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -20,6 +24,7 @@
 #include "recording_output.hpp"
 #include "simulation_source.hpp"
 #include "warehousesim/metrics/export.hpp"
+#include "warehousesim/simulation/audit.hpp"
 #include "warehousesim/simulation/metrics_collector.hpp"
 #include "warehousesim/simulation/recording.hpp"
 #include "warehousesim/simulation/recording_file.hpp"
@@ -32,7 +37,7 @@ namespace sim = warehousesim::simulation;
 
 void printUsage(std::ostream& out) {
   out << "usage: warehousesim_cli [--ticks N] [--seed N] [--layout NAME | --map FILE]\n"
-         "                        [--robots N] [--spawn N] [--threads N]\n"
+         "                        [--robots N] [--spawn N] [--threads N] [--audit]\n"
          "                        [--metrics] [--metrics-csv BASE]\n"
          "                        [--record FILE [--checkpoint-interval N]]\n"
          "       warehousesim_cli --replay FILE [--ticks N] [--no-verify] [--threads N]\n"
@@ -48,6 +53,9 @@ void printUsage(std::ostream& out) {
          "  --threads N  plan routes on N worker threads besides the main one (default 0). The run "
          "is\n"
          "               the same for every N; only the time it takes changes\n"
+         "  --audit      check every step against the simulator's invariants (collisions, task\n"
+         "               ownership, event order, numbers); exit 1 and say what if one is broken\n"
+         "  --version    print the version and exit\n"
          "  --metrics    also print the (simulated) performance dashboard to stderr\n"
          "  --metrics-csv BASE  write BASE.runs.csv, BASE.robots.csv and BASE.series.csv\n"
          "  --record FILE  also write a recording of the run: what it was built from, a checksum "
@@ -130,34 +138,51 @@ int replayRecording(const std::string& file, std::optional<std::uint64_t> until,
 
 // Runs `simulation` for `ticks` steps, measuring and recording as asked, and prints the final
 // state.
-int runLive(sim::Simulation simulation, std::uint64_t ticks, const Metrics& metrics,
+int runLive(sim::Simulation simulation, std::uint64_t ticks, bool audit, const Metrics& metrics,
             const std::string& recordFile, std::uint64_t checkpointInterval,
             const warehousesim::apps::WarehouseSource& source, std::uint64_t seed) {
   // With a recorder the simulation lives in it, and everything is stepped through it so that it
   // misses nothing.
   std::optional<sim::Recorder> recorder;
+  std::optional<sim::Simulation> plain;
   if (!recordFile.empty()) {
     recorder.emplace(std::move(simulation), checkpointInterval);
+  } else {
+    plain.emplace(std::move(simulation));
   }
-  const sim::Simulation& state = recorder ? recorder->simulation() : simulation;
+  const sim::Simulation& state = recorder ? recorder->simulation() : *plain;
 
   std::optional<sim::MetricsCollector> collector;
   if (metrics.wanted()) {
     collector.emplace(state);
   }
+  std::optional<sim::InvariantAuditor> auditor;
+  if (audit) {
+    auditor.emplace(state.warehouse());
+    auditor->observe(state);
+  }
   for (std::uint64_t tick = 0; tick < ticks; ++tick) {
     if (recorder) {
       recorder->step();
     } else {
-      simulation.step();
+      plain->step();
     }
     if (collector) {
       collector->observe(state);
+    }
+    if (auditor) {
+      auditor->observe(state);
     }
   }
   std::cout << sim::toJson(state.snapshot()).dump(2) << '\n';
 
   int status = 0;
+  if (auditor) {
+    std::cerr << auditor->summary() << '\n';
+    if (!auditor->ok()) {
+      status = 1;
+    }
+  }
   if (collector) {
     const warehousesim::metrics::RunLabel label{warehousesim::apps::warehouseLabel(source), seed,
                                                 state.config().taskSpawnInterval};
@@ -181,6 +206,9 @@ int runLive(sim::Simulation simulation, std::uint64_t ticks, const Metrics& metr
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (warehousesim::apps::printsVersion(argc, argv, "warehousesim_cli", std::cout)) {
+    return 0;
+  }
   std::uint64_t ticks = 200;
   std::uint64_t seed = 1;
   std::uint64_t checkpointInterval = sim::kDefaultCheckpointInterval;
@@ -188,6 +216,7 @@ int main(int argc, char** argv) {
   bool seedGiven = false;
   bool intervalGiven = false;
   bool noVerify = false;
+  bool audit = false;
   std::uint64_t threads = 0;
   warehousesim::apps::WarehouseSource source;
   Metrics metrics;
@@ -202,6 +231,10 @@ int main(int argc, char** argv) {
     }
     if (argument == "--no-verify") {
       noVerify = true;
+      continue;
+    }
+    if (argument == "--audit") {
+      audit = true;
       continue;
     }
     if (argument == "--ticks") {
@@ -235,7 +268,7 @@ int main(int argc, char** argv) {
   if (failed || source.conflicting() ||
       (replaying && (recording || seedGiven || intervalGiven || !source.layout.empty() ||
                      !source.mapFile.empty() || source.robots || source.spawn)) ||
-      (!replaying && noVerify) || (intervalGiven && !recording)) {
+      (!replaying && noVerify) || (intervalGiven && !recording) || (replaying && audit)) {
     printUsage(std::cerr);
     return 2;
   }
@@ -262,8 +295,8 @@ int main(int argc, char** argv) {
       return 1;
     }
     made.simulation->usePlanningThreads(static_cast<std::size_t>(threads));
-    return runLive(std::move(*made.simulation), ticks, metrics, recordFile, checkpointInterval,
-                   source, seed);
+    return runLive(std::move(*made.simulation), ticks, audit, metrics, recordFile,
+                   checkpointInterval, source, seed);
   } catch (const std::exception& error) {
     std::cerr << "error: " << error.what() << '\n';
     return 1;

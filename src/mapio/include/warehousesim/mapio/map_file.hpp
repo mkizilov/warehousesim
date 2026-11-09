@@ -36,7 +36,7 @@ inline constexpr std::string_view kFormatName = "warehousesim-map";
 inline constexpr int kFormatVersion = 1;
 inline constexpr std::size_t kMaxNameBytes = 80;
 // A 512 x 512 map with every cell listed takes under 3 MB; anything bigger is not a map.
-inline constexpr std::size_t kMaxFileBytes = 4U * 1024U * 1024U;
+inline constexpr std::size_t kMaxFileBytes = std::size_t{4} * 1024 * 1024;
 // Document, list, pair: the schema never goes deeper than 3; a little more is allowed so that the
 // error says what is wrong instead of the nesting being the error.
 inline constexpr int kMaxNesting = 4;

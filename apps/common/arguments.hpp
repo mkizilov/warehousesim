@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -13,7 +14,23 @@
 
 #include "warehousesim/world/layouts.hpp"
 
+#ifndef WAREHOUSESIM_VERSION
+#define WAREHOUSESIM_VERSION "unknown"
+#endif
+
 namespace warehousesim::apps {
+
+// If `--version` is among the arguments, prints "<program> <version>" and says so.
+[[nodiscard]] inline bool printsVersion(int argc, char** argv, std::string_view program,
+                                        std::ostream& out) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::string_view(argv[i]) == "--version") {
+      out << program << ' ' << WAREHOUSESIM_VERSION << '\n';
+      return true;
+    }
+  }
+  return false;
+}
 
 [[nodiscard]] inline std::optional<std::uint64_t> parseUnsigned(std::string_view text) {
   std::uint64_t value = 0;

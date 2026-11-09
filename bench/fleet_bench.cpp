@@ -165,6 +165,7 @@ int main(int argc, char** argv) {
     if (!csvFile.empty()) {
       std::vector<std::pair<warehousesim::metrics::RunLabel, warehousesim::metrics::FleetMetrics>>
           rows;
+      rows.reserve(runs.size());
       for (const auto& run : runs) {
         rows.emplace_back(run.label, run.metrics);
       }

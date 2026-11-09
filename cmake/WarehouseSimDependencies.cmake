@@ -33,5 +33,9 @@ if(WAREHOUSESIM_BUILD_GUI)
   set(SDL_TEST_LIBRARY OFF CACHE INTERNAL "")
   set(SDL_TESTS OFF CACHE INTERNAL "")
   set(SDL_DISABLE_INSTALL ON CACHE INTERNAL "")
+  # A downloaded SDL is linked in, so that an installed or packaged program does not need a
+  # libSDL3 next to it (a SDL found on the system is used as it is).
+  set(SDL_SHARED OFF CACHE INTERNAL "")
+  set(SDL_STATIC ON CACHE INTERNAL "")
   FetchContent_MakeAvailable(SDL3)
 endif()

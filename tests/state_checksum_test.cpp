@@ -234,7 +234,7 @@ TEST(StateChecksumTest, ThePinnedScenarioHasThePinnedChecksums) {
   EXPECT_EQ(sim.stateChecksum(), 0x8039285935d120dfULL) << "tick 100";
   sim.run(200);
   EXPECT_EQ(sim.stateChecksum(), 0xa1a801b56de760f1ULL) << "tick 300";
-  EXPECT_EQ(warehousesim::simulation::kEngineRevision, 1);
+  EXPECT_EQ(warehousesim::simulation::kEngineRevision, 2);
 }
 
 }  // namespace

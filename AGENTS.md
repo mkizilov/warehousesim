@@ -32,14 +32,14 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
 | `metrics`    | simulated performance figures: `MetricsAccumulator` (plain observations in), `FleetMetrics` (counts and derived rates), CSV and dashboard text | core only |
-| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps, run recording and replay (`RunJournal`, `Recorder`, `replay`, the recording file, `stateChecksum`), planning threads (`usePlanningThreads`) | all of the above, metrics, nlohmann_json |
+| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps, run recording and replay (`RunJournal`, `Recorder`, `replay`, the recording file, `stateChecksum`), planning threads (`usePlanningThreads`), the invariant auditor (`InvariantAuditor`) | all of the above, metrics, nlohmann_json |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing | core, world, nlohmann_json (private) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize), `editor_files` (save/load/predefined) | core, world, mapio (private) |
 | `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `FleetController`, `FleetSession`, `EditorController`); no SDL | core, world, simulation, editor |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
-`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning, fleet and scaling benchmarks.
+`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning, fleet, scaling and regression benchmarks; `scripts/campaign.py` the audited scenario campaign; `examples/` the example maps; `docs/` the user, architecture and developer guides, the audit and the benchmark results.
 
 ### Clean architecture
 
@@ -116,8 +116,9 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   walkable cells when it is built, so the layout may only change through `Simulation::placeObstacle` and
   `clearObstacle`, which rebuild it and repair the routes that cross the change. `robots::forecastHolds()`
   must keep using the robot's real motion code (`stepUnobstructed`), not an approximation of it. Anything
-  that moves a robot other than on its own turn (`stepAside`) must tell the controller (`relocate`) and
-  must use up that robot's step. Keep `CollisionAvoidancePropertyTest` and `TrafficAudit` (no overlap, no
+  that moves a robot other than on its own turn (`stepAside`) must tell the controller (`relocate`), must
+  use up that robot's step and must only be done to a robot that has not moved in this step
+  (`movedThisStep_`; the audit found robots that moved two cells in a tick without it). Keep `CollisionAvoidancePropertyTest` and `TrafficAudit` (no overlap, no
   swap, at most a cell of movement per tick) green on every layout, and the demo-hall standstill test: a
   change to blocking or sidestepping rules is checked against many seeds, not one (the throughput of the
   demo hall varies by about +-3 tasks per 500 ticks between seeds, so single-seed comparisons mislead).
@@ -245,6 +246,27 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   kept or not (`recent_`), because the planning limits were tuned that way: kept fields save time, not work.
   If a speed-up must change what a run computes (for instance, counting fewer expansions), it is a change of
   the engine: raise `kEngineRevision` and regenerate the fixtures, in the same change.
+- What must hold of every run is written down once, in `simulation::InvariantAuditor` (`audit.hpp`):
+  collision safety, task ownership and accounting, event order (the tick advances by one, tasks are made in
+  id order, no counter goes down) and finite numbers. The end-to-end, random-world and example tests, the
+  benchmarks and `warehousesim_cli --audit` all use it, so a new rule goes there, with a test in
+  `audit_test.cpp` that hand-builds a `Snapshot` which breaks it. It only reads: an audited run is the same
+  run. Never loosen a rule to make a scenario pass; a case that is safe but not solved is pinned by a
+  `...StaySafe` test instead.
+- The performance gate is `warehousesim_regression_bench` against `bench/regression_baseline.txt`. Tasks
+  done and failed, search work and the state checksum are compared exactly, heap allocations per step to
+  within 10% (libc++ and non-sanitizer builds only); time is never in the committed baseline, because it
+  belongs to a machine (`--save-times` / `--times` compare builds on one machine). Regenerate the baseline
+  from the `release` preset only on purpose, and say in the commit why behaviour or allocations moved; a
+  behaviour change also raises `kEngineRevision`.
+- `examples/*.json` are maps in the editor's canonical form (`EveryExampleMapIsValidAndRunsClean...` checks
+  that, and runs each). A new example gets a line in `examples/CMakeLists.txt` (fleet, load, ticks) and in
+  `examples/README.md`, and must pass `--audit`.
+- The tools are pinned (`cmake` 3.31.6, `ninja` 1.11.1.4, `clang-format` 21.1.8, `clang-tidy` 21.1.6, in the
+  project-local `.venv`) and CI installs the same versions; change them together or not at all. The
+  sanitizer presets disable recovery, so any finding fails the test. A release is the `VERSION` in the
+  top-level `CMakeLists.txt`, a `CHANGELOG.md` entry, the `package` build preset and a `v<version>` tag
+  (the Release workflow refuses a tag that disagrees with the version).
 - Everything the editor decides is in `editor` (the model) and `view::EditorController` (input to edits):
   both are tested without a display, with plain `InputEvents`. `rendering` only translates SDL events into
   `PointerAction`s and `EditorCommand`s, in the order they happened, and must not decide anything. Anything
@@ -263,7 +285,8 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   generous timeout), never on fixed sleeps; sleeps are allowed only to check that something does *not* happen.
 - Tests are not allowed to touch the network, the display, or files outside the build tree. Tests that
   need files use `tests/scratch_dir.hpp` (`ScratchDir`), which creates a uniquely named directory below
-  the working directory (the build tree under ctest) and removes it again.
+  the working directory (the build tree under ctest) and removes it again. The end-to-end tests also read
+  (never write) the checked-in `examples/` through `WAREHOUSESIM_EXAMPLES_DIR`.
 - Fix bugs by adding a regression test first or alongside. Never weaken or delete a test to make it pass.
 
 ### Memory safety and resource cleanup
@@ -312,7 +335,10 @@ SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_editor --file build/smoke-
 cmake --preset asan && cmake --build --preset asan && ctest --preset asan   # ASan + UBSan
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan   # ThreadSanitizer
 cmake --preset tidy && cmake --build --preset tidy                          # clang-tidy
-find src apps tests \( -name '*.cpp' -o -name '*.hpp' \) | xargs clang-format --dry-run --Werror
+find src apps tests bench testing \( -name '*.cpp' -o -name '*.hpp' \) | xargs clang-format --dry-run --Werror
+build/release/bench/warehousesim_regression_bench                          # the performance gate
+build/default/apps/warehousesim_cli --map examples/cross-dock.json --robots 12 --ticks 1500 --audit
+cmake --build --preset package                                              # the release archive
 ```
 
 Use `--preset headless` when SDL3 cannot be built or fetched. Report any check you could not run, and why,

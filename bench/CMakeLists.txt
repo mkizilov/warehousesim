@@ -36,6 +36,27 @@ if(WAREHOUSESIM_BUILD_TESTS)
   add_test(NAME scaling_bench_smoke COMMAND warehousesim_scaling_bench --quick)
 endif()
 
+# Performance regression gate: a fixed set of scenarios against bench/regression_baseline.txt. What
+# it compares is exact (tasks done, search work, state checksum, heap allocations a step), so it can
+# run in the test suite; wall-clock time is reported, and compared only with times saved on the
+# same machine. See docs/developer-guide.md (The regression gate).
+add_executable(warehousesim_regression_bench regression_bench.cpp)
+target_include_directories(warehousesim_regression_bench PRIVATE "${CMAKE_SOURCE_DIR}/apps/common")
+target_link_libraries(warehousesim_regression_bench PRIVATE warehousesim::simulation)
+target_compile_definitions(warehousesim_regression_bench PRIVATE
+  WAREHOUSESIM_REGRESSION_BASELINE="${CMAKE_CURRENT_SOURCE_DIR}/regression_baseline.txt")
+warehousesim_configure_target(warehousesim_regression_bench)
+# Counting allocations replaces operator new, which sanitizers do not appreciate.
+if(NOT WAREHOUSESIM_SANITIZE)
+  target_link_libraries(warehousesim_regression_bench PRIVATE warehousesim::testing_allocation)
+else()
+  target_link_libraries(warehousesim_regression_bench PRIVATE warehousesim::testing)
+  target_sources(warehousesim_regression_bench PRIVATE alloc_stub.cpp)
+endif()
+if(WAREHOUSESIM_BUILD_TESTS)
+  add_test(NAME regression_bench_quick COMMAND warehousesim_regression_bench --quick --repeats 1)
+endif()
+
 if(WAREHOUSESIM_BUILD_TESTS)
   add_test(NAME fleet_bench_smoke
     COMMAND warehousesim_fleet_bench --quick

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,6 +15,9 @@ permissions:
 env:
   CMAKE_BUILD_PARALLEL_LEVEL: 2
   CTEST_PARALLEL_LEVEL: 2
+  # The tool versions the code was formatted and analysed with.
+  CLANG_FORMAT_VERSION: 21.1.8
+  CLANG_TIDY_VERSION: 21.1.6
 
 jobs:
   format:
@@ -21,25 +25,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format
+        run: python3 -m pip install --user clang-format==${CLANG_FORMAT_VERSION}
       - name: Check formatting
         run: |
-          find src apps tests \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
-            | xargs -0 clang-format --dry-run --Werror
+          find src apps tests bench testing \( -name '*.cpp' -o -name '*.hpp' \) -print0 \
+            | xargs -0 "$HOME/.local/bin/clang-format" --dry-run --Werror
 
+  # The platforms and compilers the project is built and tested on. The first four are the
+  # supported configurations; the last two are experimental (they have not been run by the authors,
+  # so a failure there is reported but does not fail the workflow).
   build-test:
-    name: build-test (${{ matrix.os }}, ${{ matrix.preset }})
+    name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, preset: default }
-          - { os: ubuntu-24.04, preset: release }
-          - { os: macos-14, preset: default }
+          - { name: "ubuntu clang, debug + GUI", os: ubuntu-24.04, preset: default, cc: clang, cxx: clang++, experimental: false }
+          - { name: "ubuntu clang, release + GUI", os: ubuntu-24.04, preset: release, cc: clang, cxx: clang++, experimental: false }
+          - { name: "macos clang, debug + GUI", os: macos-14, preset: default, cc: clang, cxx: clang++, experimental: false }
+          - { name: "macos clang, release + GUI", os: macos-14, preset: release, cc: clang, cxx: clang++, experimental: false }
+          - { name: "ubuntu gcc, headless (experimental)", os: ubuntu-24.04, preset: headless, cc: gcc-13, cxx: g++-13, experimental: true }
+          - { name: "windows msvc, headless (experimental)", os: windows-2022, preset: headless, cc: cl, cxx: cl, experimental: true }
     env:
-      CC: clang
-      CXX: clang++
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@v4
       - name: Install SDL3 build prerequisites (Linux)
@@ -51,6 +62,12 @@ jobs:
       - name: Install Ninja (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ninja -y
+      - name: MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
       - name: Build
@@ -66,7 +83,16 @@ jobs:
       - name: Scaling benchmark (wall-clock figures; fails if a thread count changes any result)
         if: matrix.preset == 'release'
         run: build/release/bench/warehousesim_scaling_bench --robots 100 --ticks 400 --samples 1
+      - name: Performance regression gate (exact behaviour and allocations against the baseline)
+        if: matrix.preset == 'release'
+        run: build/release/bench/warehousesim_regression_bench
+      - name: Scenario campaign (every layout, fleet, load and seed, audited on every step)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "${{ matrix.preset }}" = release ]; then flags=""; else flags="--quick"; fi
+          python3 scripts/campaign.py build/${{ matrix.preset }}/apps/warehousesim_cli $flags
       - name: Large hall, 100 robots, planning on 2 threads (the same run on one thread, and its replay, must match)
+        if: runner.os != 'Windows'
         run: |
           cli=build/${{ matrix.preset }}/apps/warehousesim_cli
           $cli --layout large --robots 100 --spawn 1 --ticks 300 --seed 3 --threads 2 \
@@ -75,7 +101,15 @@ jobs:
           $cli --replay build/ci-large.rec.json > build/ci-large.replay.json
           cmp build/ci-large.threaded.json build/ci-large.single.json
           cmp build/ci-large.threaded.json build/ci-large.replay.json
+      - name: Audit every example map (the invariants hold on every step)
+        if: runner.os != 'Windows'
+        run: |
+          for map in examples/*.json; do
+            build/${{ matrix.preset }}/apps/warehousesim_cli --map "$map" --robots 8 --spawn 4 \
+              --ticks 1000 --audit > /dev/null
+          done
       - name: Record and replay every predefined layout (the replay must match, byte for byte)
+        if: runner.os != 'Windows'
         run: |
           for layout in demo compact fulfilment; do
             build/${{ matrix.preset }}/apps/warehousesim_cli --layout $layout --ticks 300 --seed 2 \
@@ -85,27 +119,36 @@ jobs:
             cmp build/ci-$layout.run.json build/ci-$layout.replay.json
           done
       - name: Metrics dashboard text and CSV export (headless)
+        if: runner.os != 'Windows'
         run: |
           build/${{ matrix.preset }}/apps/warehousesim_cli --layout compact --ticks 300 --seed 1 \
             --metrics --metrics-csv build/ci-metrics > /dev/null 2> build/ci-metrics.txt
           grep -q 'Simulated results. Not a claim about real robots.' build/ci-metrics.txt
           test -s build/ci-metrics.runs.csv
-      - name: Headless CLI smoke run (every predefined layout)
-        run: |
-          for layout in demo compact fulfilment; do
-            build/${{ matrix.preset }}/apps/warehousesim_cli --layout $layout --ticks 100 --seed 1 > /dev/null
-          done
       - name: GUI smoke run (SDL dummy video driver)
+        if: matrix.preset == 'default' || matrix.preset == 'release'
         env:
           SDL_VIDEODRIVER: dummy
         run: build/${{ matrix.preset }}/apps/warehousesim_gui --frames 30
       - name: Map editor smoke run (SDL dummy video driver; nothing is saved)
+        if: matrix.preset == 'default' || matrix.preset == 'release'
         env:
           SDL_VIDEODRIVER: dummy
         run: |
           build/${{ matrix.preset }}/apps/warehousesim_editor --file "$RUNNER_TEMP/smoke-map.json" \
             --layout compact --frames 30
+      - name: Package (release) and run the packaged program
+        if: matrix.preset == 'release'
+        run: |
+          cmake --build --preset package
+          mkdir -p build/unpacked
+          tar -xzf build/release/warehousesim-*.tar.gz -C build/unpacked --strip-components=1
+          build/unpacked/bin/warehousesim_cli --map build/unpacked/share/warehousesim/examples/small-depot.json \
+            --ticks 200 --audit > /dev/null
 
+  # AddressSanitizer + UBSan (with the float-divide-by-zero and float-cast-overflow checks) and
+  # ThreadSanitizer, on the whole suite. Any finding aborts the test (no recovery); LeakSanitizer
+  # runs on Linux.
   sanitizers:
     name: sanitizers (${{ matrix.preset }})
     runs-on: ubuntu-24.04
@@ -116,6 +159,7 @@ jobs:
     env:
       CC: clang
       CXX: clang++
+      ASAN_OPTIONS: detect_leaks=1
     steps:
       - uses: actions/checkout@v4
       - name: Install Ninja
@@ -127,16 +171,21 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+  # clang-tidy with the version the code was cleaned with (run by the authors on macOS). Against the
+  # compiler and headers of this runner it has not been run, hence experimental.
   clang-tidy:
     runs-on: ubuntu-24.04
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build clang clang-tidy
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build clang
+          python3 -m pip install --user clang-tidy==${CLANG_TIDY_VERSION}
       - name: Configure
         env:
           CC: clang
           CXX: clang++
-        run: cmake --preset tidy
+        run: PATH="$HOME/.local/bin:$PATH" cmake --preset tidy
       - name: Build with clang-tidy
-        run: cmake --build --preset tidy
+        run: PATH="$HOME/.local/bin:$PATH" cmake --build --preset tidy
