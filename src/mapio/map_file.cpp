@@ -406,7 +406,7 @@ void appendList(std::string& out, std::string_view key, const std::vector<core::
         out += ',';
         ++column;
         // The item may need a comma of its own after it if another item follows.
-        const std::size_t trailingComma = i + 1 < cells.size() ? 1 : 0;
+        const std::size_t trailingComma = i + 1 < cells.size() ? 1U : 0U;
         if (column + 1 + item.size() + trailingComma > kWidth) {
           out += "\n" + std::string(kIndent, ' ');
           column = kIndent;

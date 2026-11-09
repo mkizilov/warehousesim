@@ -64,7 +64,7 @@ class PointSet {
       }
     }
   }
-  [[nodiscard]] std::size_t count(Point point) const noexcept { return contains(point) ? 1 : 0; }
+  [[nodiscard]] std::size_t count(Point point) const noexcept { return contains(point) ? 1U : 0U; }
 
   [[nodiscard]] bool empty() const noexcept { return items_.empty(); }
   [[nodiscard]] std::size_t size() const noexcept { return items_.size(); }

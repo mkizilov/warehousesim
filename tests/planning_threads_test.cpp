@@ -198,7 +198,7 @@ TEST(PlanningThreadsTest, RepairedRoutesGoToTheRobotsTheyWereAskedFor) {
       const auto along = sim.submitTask(Point{6, 1}, Point{6, 2});
       const auto pocket = sim.submitTask(Point{3, 0}, Point{6, 2});
       sim.step();
-      const std::size_t alongRobot = pocketRobotFirst ? 1 : 0;
+      const std::size_t alongRobot = pocketRobotFirst ? 1U : 0U;
       const std::size_t pocketRobot = 1 - alongRobot;
       ASSERT_TRUE(sim.robots()[alongRobot].task() == along);
       ASSERT_TRUE(sim.robots()[pocketRobot].task() == pocket);
