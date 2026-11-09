@@ -303,11 +303,13 @@ int main(int argc, char** argv) {
                              ", checksum " + hex(r.checksum) + " vs " + hex(b.checksum) +
                              "); if that is intended, regenerate the baseline and say why");
         }
-        if (kAllocationsComparable && b.allocationsPerStep > 0.0 && r.allocationsPerStep > 0.0 &&
-            r.allocationsPerStep > b.allocationsPerStep * 1.10 + 8.0) {
-          problems.push_back(r.name + ": " + std::to_string(r.allocationsPerStep) +
-                             " allocations a step, the baseline has " +
-                             std::to_string(b.allocationsPerStep));
+        if constexpr (kAllocationsComparable) {
+          if (b.allocationsPerStep > 0.0 && r.allocationsPerStep > 0.0 &&
+              r.allocationsPerStep > b.allocationsPerStep * 1.10 + 8.0) {
+            problems.push_back(r.name + ": " + std::to_string(r.allocationsPerStep) +
+                               " allocations a step, the baseline has " +
+                               std::to_string(b.allocationsPerStep));
+          }
         }
       }
     }
