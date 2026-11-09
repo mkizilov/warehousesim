@@ -85,8 +85,9 @@ TEST(RunnerRecordingTest, TheRecordingOfARunReplaysToTheStateAndTheFiguresTheRun
   SimulationRunner runner = makeRunner(5);
   runner.startRecording(20);
   runner.setSpeed(8);
-  runner.start(300);
+  runner.start(150);  // the first half: the worker waits at tick 150 until it is started again
   // Commands of every kind, posted while it runs, so that each lands on whatever tick it lands on.
+  // (A worker held back by a limit applies them too, at the tick it stopped at.)
   // The robots are taken out of service first, so that the tasks stay waiting and can be changed.
   ASSERT_TRUE(runner.post(SetRobotService{RobotId{1}, false}));
   ASSERT_TRUE(runner.post(SetRobotService{RobotId{2}, false}));
@@ -105,9 +106,19 @@ TEST(RunnerRecordingTest, TheRecordingOfARunReplaysToTheStateAndTheFiguresTheRun
   ASSERT_TRUE(runner.post(ClearObstacle{P(5, 3)}));
   ASSERT_TRUE(runner.post(SetRobotService{RobotId{1}, true}));
   ASSERT_TRUE(runner.post(SetRobotService{RobotId{2}, true}));
+  waitForCommands(runner, 11);
+  ASSERT_TRUE(runner.waitForTick(150, kTimeout));
+  runner.stop();
 
-  // Recordings taken while it runs are each a run in themselves, as of the tick they were taken at.
+  // Recordings of a run that is not over are each a run in themselves, as of the tick they were
+  // taken at. The first is taken with the worker held at its limit, so it is certain to be one of
+  // a run half way; how many more are taken while the run goes on depends on timing (the whole run
+  // can be over before a slow machine gets to look), so only the first is counted on.
   std::vector<Recording> midway;
+  const std::optional<Recording> half = runner.recording();
+  ASSERT_TRUE(half.has_value());
+  midway.push_back(*half);
+  runner.start(300);
   while (runner.snapshot().tick < 300) {
     if (auto recording = runner.recording()) {
       midway.push_back(std::move(*recording));
@@ -118,6 +129,9 @@ TEST(RunnerRecordingTest, TheRecordingOfARunReplaysToTheStateAndTheFiguresTheRun
   runner.stop();
 
   ASSERT_FALSE(midway.empty());
+  EXPECT_EQ(midway.front().ticks, 150U);
+  EXPECT_EQ(midway.front().commands.size(), 11U)
+      << "every command was applied by the half way mark";
   for (const Recording& partial : midway) {
     const ReplayResult result = replay(partial);
     EXPECT_TRUE(result.ok()) << "a recording taken at tick " << partial.ticks << ": "
