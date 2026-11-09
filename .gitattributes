@@ -1,0 +1,5 @@
+# The example maps are in the map editor's canonical form, which ends every line with LF, and a test compares
+# each file byte for byte with what the writer produces. A checkout that turns line ends into CRLF (git for
+# Windows does by default, with core.autocrlf) would make that comparison fail, so they are checked out as
+# they are stored.
+examples/*.json text eol=lf
