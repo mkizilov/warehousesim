@@ -200,8 +200,7 @@ TEST(ReservationTableTest, PathsCrossingAtAnIntersectionClashOnlyIfTheyAreThereT
   EXPECT_FALSE(table.checkAll(R(2), earlier).has_value());
 }
 
-// ---- conflicting reservations
-// --------------------------------------------------------------------
+// ---- conflicting reservations -------------------------------------------------------------------
 
 TEST(ReservationTableTest, ARequestIsAllOrNothing) {
   ReservationTable table(layout({"..."}));
@@ -390,8 +389,7 @@ TEST(ReservationTableTest, BadRequestsAreProgrammingErrors) {
   EXPECT_EQ(table.occupancyCount(), 0U);
 }
 
-// ---- against a brute-force reference
-// --------------------------------------------------------------
+// ---- against a brute-force reference ------------------------------------------------------------
 
 // Everything the table promises, decided the slow obvious way.
 TEST(ReservationTablePropertyTest, RandomRequestsAreAcceptedOrRefusedExactlyAsAReferenceSays) {
@@ -478,6 +476,138 @@ TEST(ReservationTablePropertyTest, RandomRequestsAreAcceptedOrRefusedExactlyAsAR
   EXPECT_GT(vertex, 500);
   EXPECT_GT(swaps, 50);
   EXPECT_GT(blocked, 500);
+}
+
+// ---- the yes-or-no questions a search asks by the thousand --------------------------------------
+
+TEST(ReservationTableFastPathTest, IsFreeAndIsTraversableAgreeWithCheckOnRandomTables) {
+  const Warehouse warehouse = layout({"....#", ".S...", "....."});
+  Rng rng(0xFA57);
+  const Point directions[4] = {P(1, 0), P(-1, 0), P(0, 1), P(0, -1)};
+  int free = 0;
+  int taken = 0;
+  int passable = 0;
+  int refused = 0;
+  for (int round = 0; round < 40; ++round) {
+    ReservationTable table(warehouse);
+    for (int i = 0; i < 70; ++i) {
+      const RobotId robot = R(static_cast<std::uint32_t>(1 + rng.below(4)));
+      if (rng.below(3) != 0) {
+        const Step from = rng.below(12);
+        (void)table.reserve(
+            robot, occupy(P(static_cast<int>(rng.below(5)), static_cast<int>(rng.below(3))), from,
+                          from + 1 + rng.below(3)));
+      } else {
+        const Point from = P(static_cast<int>(rng.below(5)), static_cast<int>(rng.below(3)));
+        (void)table.reserve(robot, Traverse{from, from + directions[rng.below(4)], rng.below(12)});
+      }
+    }
+    for (int q = 0; q < 300; ++q) {
+      const RobotId robot = R(static_cast<std::uint32_t>(1 + rng.below(5)));
+      const Step step = rng.below(14);
+      const Point cell = P(static_cast<int>(rng.below(7)) - 1, static_cast<int>(rng.below(5)) - 1);
+      const bool isFree = table.isFree(robot, cell, step);
+      ASSERT_EQ(isFree, !table.check(robot, occupy(cell, step, step + 1)).has_value())
+          << cell.x << "," << cell.y << " at " << step;
+      (isFree ? free : taken) += 1;
+
+      const Point from = P(static_cast<int>(rng.below(7)) - 1, static_cast<int>(rng.below(5)) - 1);
+      const Point to = from + directions[rng.below(4)];
+      const bool canGo = table.isTraversable(robot, from, to, step);
+      ASSERT_EQ(canGo, !table.check(robot, Traverse{from, to, step}).has_value())
+          << from.x << "," << from.y << " to " << to.x << "," << to.y << " at " << step;
+      (canGo ? passable : refused) += 1;
+    }
+  }
+  EXPECT_GT(free, 1000);  // every kind of answer was given
+  EXPECT_GT(taken, 1000);
+  EXPECT_GT(passable, 500);
+  EXPECT_GT(refused, 300);
+}
+
+TEST(ReservationTableFastPathTest, ARobotNeverBlocksItself) {
+  ReservationTable table(layout({"..."}));
+  ASSERT_FALSE(table.reserve(R(1), occupy(P(1, 0), 3, 6)).has_value());
+  ASSERT_FALSE(table.reserve(R(1), Traverse{P(0, 0), P(1, 0), 2}).has_value());
+  EXPECT_TRUE(table.isFree(R(1), P(1, 0), 4));
+  EXPECT_FALSE(table.isFree(R(2), P(1, 0), 4));
+  EXPECT_TRUE(table.isFree(R(2), P(1, 0), 6)) << "the range is half open";
+  EXPECT_TRUE(table.isTraversable(R(1), P(1, 0), P(0, 0), 2));
+  EXPECT_FALSE(table.isTraversable(R(2), P(1, 0), P(0, 0), 2)) << "head on with robot 1's move";
+  EXPECT_TRUE(table.isTraversable(R(2), P(1, 0), P(0, 0), 3));
+  EXPECT_TRUE(table.isTraversable(R(2), P(1, 0), P(2, 0), 2)) << "the same way is not head on";
+}
+
+TEST(ReservationTableFastPathTest, AWallAndTheEdgeOfTheMapAreNeverFree) {
+  ReservationTable table(layout({".#."}));
+  EXPECT_FALSE(table.isFree(R(1), P(1, 0), 0));
+  EXPECT_FALSE(table.isFree(R(1), P(-1, 0), 0));
+  EXPECT_FALSE(table.isFree(R(1), P(0, 5), 0));
+  EXPECT_TRUE(table.isFree(R(1), P(0, 0), 0));
+  EXPECT_FALSE(table.isTraversable(R(1), P(0, 0), P(1, 0), 0));
+  EXPECT_FALSE(table.isTraversable(R(1), P(2, 0), P(3, 0), 0));
+  EXPECT_FALSE(table.isTraversable(R(1), P(-1, 0), P(0, 0), 0)) << "it cannot start off the map";
+}
+
+TEST(ReservationTableFastPathTest, ATraversalFromOffTheMapIsRefusedAsBlockedNotRecorded) {
+  ReservationTable table(layout({"..."}));
+  const auto clash = table.reserve(R(1), Traverse{P(-1, 0), P(0, 0), 2});
+  ASSERT_TRUE(clash.has_value());
+  EXPECT_EQ(clash->kind, ConflictKind::Blocked);
+  EXPECT_EQ(table.traversalCount(), 0U);
+}
+
+// ---- giving back what a robot holds -------------------------------------------------------------
+
+TEST(ReservationTableReleaseTest, ReleaseGivesBackEverythingARobotHoldsWhereverItIsAndNothingElse) {
+  ReservationTable table(layout({"....", "...."}));
+  ASSERT_FALSE(table.reserve(R(1), occupy(P(0, 0), 2, 4)).has_value());
+  ASSERT_FALSE(table.reserve(R(1), occupy(P(1, 0), 3, 5)).has_value());
+  ASSERT_FALSE(table.reserve(R(1), occupy(P(2, 1), 9, 10)).has_value());
+  ASSERT_FALSE(table.reserve(R(1), Traverse{P(0, 0), P(1, 0), 2}).has_value());
+  ASSERT_FALSE(table.reserve(R(1), Traverse{P(1, 0), P(2, 0), 4}).has_value());
+  ASSERT_FALSE(table.reserve(R(1), Traverse{P(2, 1), P(3, 1), 9}).has_value());
+  ASSERT_FALSE(table.reserve(R(2), occupy(P(1, 0), 0, 2)).has_value());
+  ASSERT_FALSE(table.reserve(R(2), Traverse{P(3, 0), P(2, 0), 7}).has_value());
+  ASSERT_EQ(table.occupancyCount(), 4U);
+  ASSERT_EQ(table.traversalCount(), 4U);
+
+  table.release(R(1));
+  EXPECT_EQ(table.occupancyCount(), 1U);
+  EXPECT_EQ(table.traversalCount(), 1U);
+  EXPECT_TRUE(table.reservationsOf(R(1)).empty());
+  EXPECT_EQ(table.holder(P(1, 0), 1), R(2));
+  EXPECT_FALSE(table.holder(P(0, 0), 3).has_value());
+
+  table.release(R(1));  // nothing left to give back
+  table.release(R(9));  // never held anything
+  EXPECT_EQ(table.occupancyCount(), 1U);
+  EXPECT_EQ(table.traversalCount(), 1U);
+
+  // The cells and edges are free for others again, and robot 2's move still stands in the way.
+  EXPECT_FALSE(table.reserve(R(3), occupy(P(0, 0), 2, 4)).has_value());
+  EXPECT_TRUE(table.reserve(R(3), Traverse{P(2, 0), P(3, 0), 7}).has_value());
+}
+
+TEST(ReservationTableReleaseTest, ARobotCanReserveAndReleaseOverAndOverWithoutTheTableGrowing) {
+  ReservationTable table(layout({"......", "......"}));
+  ASSERT_FALSE(table.reserve(R(2), occupy(P(5, 1), 0, 100)).has_value());
+  for (int i = 0; i < 300; ++i) {
+    const Step at = static_cast<Step>(i % 7);
+    ASSERT_FALSE(table.reserve(R(1), occupy(P(0, 0), at, at + 3)).has_value());
+    ASSERT_FALSE(table.reserve(R(1), occupy(P(1, 0), at, at + 3)).has_value());
+    ASSERT_FALSE(table.reserve(R(1), Traverse{P(0, 0), P(1, 0), at}).has_value());
+    ASSERT_EQ(table.occupancyCount(), 3U);
+    ASSERT_EQ(table.traversalCount(), 1U);
+    table.release(R(1));
+    ASSERT_EQ(table.occupancyCount(), 1U);
+    ASSERT_EQ(table.traversalCount(), 0U);
+  }
+  table.clear();
+  EXPECT_EQ(table.occupancyCount(), 0U);
+  ASSERT_FALSE(table.reserve(R(1), occupy(P(0, 0), 0, 2)).has_value());
+  table.release(R(1));
+  EXPECT_EQ(table.occupancyCount(), 0U) << "release after clear still finds what was reserved";
 }
 
 TEST(ReservationTablePropertyTest, TheSameRequestsInTheSameOrderGiveTheSameTableEveryTime) {

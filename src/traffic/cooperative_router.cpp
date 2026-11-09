@@ -30,11 +30,11 @@ std::optional<std::vector<Point>> plainRoute(planning::PathPlanner& planner,
 }  // namespace
 
 bool TableConstraints::cellFree(Point cell, Tick step) const {
-  return !table_.check(self_, Occupy{cell, StepRange{step, step + 1}}).has_value();
+  return table_.isFree(self_, cell, step);
 }
 
 bool TableConstraints::edgeFree(Point from, Point to, Tick step) const {
-  return !table_.check(self_, Traverse{from, to, step}).has_value();
+  return table_.isTraversable(self_, from, to, step);
 }
 
 const char* toString(RouteOutcomeKind kind) noexcept {
@@ -141,14 +141,20 @@ RouteOutcome CooperativeRouter::reroute(const Request& request) {
   Tick startStep = request.now;
   if (held > 0) {
     startCell = route[held - 1];
-    const auto forecast = robots::forecastHolds(robot, options.window);
-    const auto arrives = std::find_if(forecast.begin(), forecast.end(), [&](const auto& holds) {
-      return holds.front() == startCell;
-    });
-    if (arrives == forecast.end()) {
+    if (!walkerSlot_) {
+      walkerSlot_.emplace(robot);
+    } else {
+      *walkerSlot_ = robot;
+    }
+    robots::forecastHolds(*walkerSlot_, options.window, forecast_);
+    std::size_t arrives = 0;
+    while (arrives < forecast_.steps() && forecast_.holdsAt(arrives).front() != startCell) {
+      ++arrives;
+    }
+    if (arrives == forecast_.steps()) {
       return out;
     }
-    startStep = request.now + static_cast<Tick>(arrives - forecast.begin());
+    startStep = request.now + static_cast<Tick>(arrives);
   }
   if (startCell == destination) {
     out.kind = RouteOutcomeKind::Kept;
@@ -220,7 +226,12 @@ RouteOutcome CooperativeRouter::reroute(const Request& request) {
     }
   }
   if (plan.status == planning::SpaceTimeStatus::Partial) {
-    auto tail = plainRoute(request.tailPlanner, request.layout, last, destination, request.avoid);
+    planning::BlockedSet avoidNow;
+    if (request.avoidLater != nullptr) {
+      avoidNow = (*request.avoidLater)();
+    }
+    auto tail = plainRoute(request.tailPlanner, request.layout, last, destination,
+                           request.avoidLater != nullptr ? avoidNow : request.avoid);
     if (!tail) {
       out.kind = RouteOutcomeKind::NoPlan;
       return out;

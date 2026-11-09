@@ -4,6 +4,7 @@
 # completes, and checks that equal seeds give byte-identical output. Then runs a map file the
 # same way, and checks that maps that are invalid or cannot host a simulation are refused. Last,
 # records runs, replays them and checks that a replay matches and that a tampered recording is found.
+# Finally a hundred robots on planning threads: the threads change nothing a run computes.
 if(NOT CLI)
   message(FATAL_ERROR "pass -DCLI=<path to warehousesim_cli>")
 endif()
@@ -222,3 +223,57 @@ if(NOT nowhere_status EQUAL 2)
   message(FATAL_ERROR "a recording that cannot be written should exit with status 2 at once, got '${nowhere_status}'")
 endif()
 file(REMOVE "${recording}")
+
+# ---- a hundred robots and planning threads ----------------------------------------------------
+# The number of planning threads changes how long a run takes and nothing it computes: the output of
+# a run, of the same run on threads, and of the replay of its recording (on none or on others) agree.
+set(large_run --layout large --robots 100 --spawn 1 --ticks 120 --seed 3)
+execute_process(COMMAND "${CLI}" ${large_run}
+                RESULT_VARIABLE status OUTPUT_VARIABLE large_single ERROR_VARIABLE errors)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "large hall, 100 robots: CLI exited with '${status}': ${errors}")
+endif()
+string(FIND "${large_single}" "\"tick\": 120" large_tick)
+if(large_tick EQUAL -1)
+  message(FATAL_ERROR "large hall: output does not report tick 120")
+endif()
+execute_process(COMMAND "${CLI}" ${large_run} --threads 2 --record "${recording}"
+                RESULT_VARIABLE status OUTPUT_VARIABLE large_threaded ERROR_VARIABLE errors)
+if(NOT status EQUAL 0)
+  message(FATAL_ERROR "large hall on 2 planning threads: CLI exited with '${status}': ${errors}")
+endif()
+if(NOT large_threaded STREQUAL large_single)
+  message(FATAL_ERROR "2 planning threads changed what the run computed")
+endif()
+foreach(threads 0 3)
+  execute_process(COMMAND "${CLI}" --replay "${recording}" --threads ${threads}
+                  RESULT_VARIABLE status OUTPUT_VARIABLE large_replayed ERROR_VARIABLE errors)
+  if(NOT status EQUAL 0)
+    message(FATAL_ERROR "replay on ${threads} planning threads exited with '${status}': ${errors}")
+  endif()
+  if(NOT large_replayed STREQUAL large_single)
+    message(FATAL_ERROR "the replay on ${threads} planning threads printed another final state")
+  endif()
+endforeach()
+file(REMOVE "${recording}")
+
+execute_process(COMMAND "${CLI}" --layout demo --robots 0 --ticks 5
+                RESULT_VARIABLE status OUTPUT_QUIET ERROR_VARIABLE errors)
+string(FIND "${errors}" "from 1 to 512 robots" fleet_message)
+if(NOT status EQUAL 1 OR fleet_message EQUAL -1)
+  message(FATAL_ERROR "a fleet of no robots should exit with status 1 and say why, got '${status}': ${errors}")
+endif()
+foreach(refused "--threads;65" "--layout;demo;--robots;100000")
+  execute_process(COMMAND "${CLI}" ${refused} --ticks 5
+                  RESULT_VARIABLE status OUTPUT_QUIET ERROR_QUIET)
+  if(NOT status EQUAL 1)
+    message(FATAL_ERROR "'${refused}' should exit with status 1, got '${status}'")
+  endif()
+endforeach()
+foreach(bad_arguments "--replay;x.json;--robots;3" "--replay;x.json;--spawn;3" "--threads")
+  execute_process(COMMAND "${CLI}" ${bad_arguments}
+                  RESULT_VARIABLE bad_status OUTPUT_QUIET ERROR_QUIET)
+  if(NOT bad_status EQUAL 2)
+    message(FATAL_ERROR "'${bad_arguments}' should exit with status 2, got '${bad_status}'")
+  endif()
+endforeach()

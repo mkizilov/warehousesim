@@ -183,7 +183,7 @@ std::uint64_t Simulation::stateChecksum() const {
   sum.add(workPool_);
   sum.add(stepWork_);
   sum.add(plannerBase_);
-  sum.add(planner_->work());
+  sum.add(plannerWork());
   return sum.value();
 }
 

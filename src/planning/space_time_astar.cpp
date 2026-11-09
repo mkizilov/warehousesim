@@ -14,7 +14,14 @@ using core::Tick;
 namespace {
 
 constexpr std::size_t kMaxWindow = 256;
+// How many goals count as cached for the purpose of charging work (see distanceField): a goal is
+// charged for when it is not among the last this many.
 constexpr std::size_t kMaxCachedFields = 24;
+// How many fields are kept to be reused, so that the charged ones are not swept again: at most this
+// many, and at most what fits in this many bytes (but never fewer than the ones charged for), so a
+// big map keeps a few and a small one many.
+constexpr std::size_t kMaxStoredFields = 512;
+constexpr std::size_t kStoredFieldBytes = 32U << 20U;
 
 // North, east, south, west: the order neighbours are tried in.
 constexpr std::array<Point, 4> kOffsets = {{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}};
@@ -74,45 +81,76 @@ const std::vector<std::int32_t>* SpaceTimeAStar::distanceField(const world::Ware
                                                                Point goal, std::size_t& work,
                                                                std::size_t maxWork) {
   const world::GridSize size = warehouse.size();
-  const std::uint64_t layout = layoutFingerprint(warehouse);
-  const std::size_t goalIndex = size.indexOf(goal);
-  for (const Field& field : fields_) {
-    if (field.layout == layout && field.goal == goalIndex) {
-      return &field.distance;
-    }
+  // Looking at every cell for each question costs more than the questions themselves on a big
+  // layout, so the fingerprint is only worked out again when the layout has changed.
+  if (warehouse.version() != fingerprintVersion_) {
+    fingerprint_ = layoutFingerprint(warehouse);
+    fingerprintVersion_ = warehouse.version();
   }
-  if (maxWork != 0 && work + size.cellCount() > maxWork) {
+  const std::uint64_t layout = fingerprint_;
+  const std::size_t goalIndex = size.indexOf(goal);
+
+  // Work is charged as if only the last kMaxCachedFields goals were remembered (`recent_`), which
+  // is what the planning limits were tuned against. The fields themselves are kept for longer
+  // (`fields_`), so that a goal that has to be charged for again is not swept again.
+  const bool charged = std::none_of(recent_.begin(), recent_.end(),
+                                    [&](const std::pair<std::uint64_t, std::size_t>& r) {
+                                      return r.first == layout && r.second == goalIndex;
+                                    });
+  if (charged && maxWork != 0 && work + size.cellCount() > maxWork) {
     return nullptr;  // a fill visits every cell it can reach: more than this much, at worst
   }
 
-  Field field{layout, goalIndex, std::vector<std::int32_t>(size.cellCount(), -1)};
-  std::vector<std::uint32_t> queue;
-  queue.push_back(static_cast<std::uint32_t>(goalIndex));
-  field.distance[goalIndex] = 0;
-  for (std::size_t head = 0; head < queue.size(); ++head) {
-    const std::uint32_t index = queue[head];
-    const Point at = size.pointAt(index);
-    for (const Point offset : kOffsets) {
-      const Point next{at.x + offset.x, at.y + offset.y};
-      if (!warehouse.isWalkable(next)) {
-        continue;
-      }
-      const std::size_t nextIndex = size.indexOf(next);
-      if (field.distance[nextIndex] < 0) {
-        field.distance[nextIndex] = field.distance[index] + 1;
-        queue.push_back(static_cast<std::uint32_t>(nextIndex));
-      }
+  Field* stored = nullptr;
+  for (Field& field : fields_) {
+    if (field.layout == layout && field.goal == goalIndex) {
+      stored = &field;
+      break;
     }
   }
-  work += queue.size();
-
-  if (fields_.size() >= kMaxCachedFields) {
-    fields_.erase(fields_.begin());
+  if (stored == nullptr) {
+    const std::size_t keep =
+        std::clamp(kStoredFieldBytes / (size.cellCount() * sizeof(std::int32_t)), kMaxCachedFields,
+                   kMaxStoredFields);
+    while (fields_.size() >= keep) {
+      fields_.erase(fields_.begin());
+    }
+    Field& field = fields_.emplace_back();
+    field.layout = layout;
+    field.goal = goalIndex;
+    field.distance.assign(size.cellCount(), -1);
+    queue_.clear();
+    queue_.push_back(static_cast<std::uint32_t>(goalIndex));
+    field.distance[goalIndex] = 0;
+    for (std::size_t head = 0; head < queue_.size(); ++head) {
+      const std::uint32_t index = queue_[head];
+      const Point at = size.pointAt(index);
+      for (const Point offset : kOffsets) {
+        const Point next{at.x + offset.x, at.y + offset.y};
+        if (!warehouse.isWalkable(next)) {
+          continue;
+        }
+        const std::size_t nextIndex = size.indexOf(next);
+        if (field.distance[nextIndex] < 0) {
+          field.distance[nextIndex] = field.distance[index] + 1;
+          queue_.push_back(static_cast<std::uint32_t>(nextIndex));
+        }
+      }
+    }
+    field.reached = queue_.size();
+    ++sweeps_;
+    stored = &field;
   }
-  fields_.push_back(std::move(field));
-  return &fields_.back().distance;
-}
 
+  if (charged) {
+    work += stored->reached;
+    if (recent_.size() >= kMaxCachedFields) {
+      recent_.erase(recent_.begin());
+    }
+    recent_.emplace_back(layout, goalIndex);
+  }
+  return &stored->distance;
+}
 std::optional<std::size_t> SpaceTimeAStar::prepare(const world::Warehouse& warehouse, Point goal,
                                                    std::size_t maxWork) {
   if (!warehouse.isWalkable(goal)) {

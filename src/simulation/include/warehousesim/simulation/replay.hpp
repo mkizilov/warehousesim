@@ -25,6 +25,10 @@ struct ReplayOptions {
   std::optional<core::Tick> until;
   // How to measure the replay (see MetricsCollector).
   metrics::MetricsOptions metrics;
+  // Plan on this many threads besides the one that replays (Simulation::usePlanningThreads). It
+  // changes nothing a replay computes, only how long it takes: a recording made on one number of
+  // threads replays on any other.
+  std::size_t planningThreads = 0;
 };
 
 // The first place where the replay stopped agreeing with the recording, and in words how.
@@ -36,7 +40,9 @@ struct Divergence {
 struct ReplayResult {
   core::Tick ticks = 0;  // steps taken: the recording's, or fewer if it was cut short or diverged
   Snapshot snapshot;     // the state the replay ended in
-  std::uint64_t checksum = 0;            // Simulation::stateChecksum() of it
+  std::uint64_t checksum = 0;  // Simulation::stateChecksum() of it
+  // What the planning threads were asked, if the replay used any (ReplayOptions::planningThreads).
+  std::optional<planning::PathBatchExecutor::Stats> planningBatches;
   metrics::FleetMetrics metrics;         // the figures of the whole replay
   std::vector<TaskEvent> taskEvents;     // what the replay saw happen to tasks
   std::vector<Checkpoint> checkpoints;   // the replay's checksum at each tick the recording has one

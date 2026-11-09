@@ -1,6 +1,7 @@
 #include "warehousesim/robots/forecast.hpp"
 
 #include <algorithm>
+#include <array>
 
 namespace warehousesim::robots {
 
@@ -41,24 +42,38 @@ UnobstructedStep stepUnobstructed(Robot& robot, double dt) {
   return result;
 }
 
-std::vector<std::vector<core::Point>> forecastHolds(Robot robot, std::size_t steps) {
+std::vector<std::vector<core::Point>> ForecastBuffer::toVectors() const {
   std::vector<std::vector<core::Point>> forecast;
-  forecast.reserve(steps);
-  for (std::size_t s = 0; s < steps; ++s) {
-    std::vector<core::Point> holds = {robot.position()};
-    if (robot.hasPath()) {
-      // Remember the path as the step starts: the robot consumes it as it passes cells.
-      const std::size_t remembered = std::min(robot.path().size(), kMaxHeldCells);
-      const std::vector<core::Point> startPath(
-          robot.path().begin(), robot.path().begin() + static_cast<std::ptrdiff_t>(remembered));
-      const UnobstructedStep step = stepUnobstructed(robot, 1.0);
-      const std::size_t held = std::min(step.heldPrefix, startPath.size());
-      holds.insert(holds.end(), startPath.begin(),
-                   startPath.begin() + static_cast<std::ptrdiff_t>(held));
-    }
-    forecast.push_back(std::move(holds));
+  forecast.reserve(steps());
+  for (std::size_t s = 0; s < steps(); ++s) {
+    const std::span<const core::Point> holds = holdsAt(s);
+    forecast.emplace_back(holds.begin(), holds.end());
   }
   return forecast;
+}
+
+void forecastHolds(Robot& walker, std::size_t steps, ForecastBuffer& out) {
+  out.clear();
+  std::array<core::Point, kMaxHeldCells> startPath;
+  for (std::size_t s = 0; s < steps; ++s) {
+    out.cells_.push_back(walker.position());
+    if (walker.hasPath()) {
+      // Remember the path as the step starts: the robot consumes it as it passes cells.
+      const std::size_t remembered = std::min(walker.path().size(), kMaxHeldCells);
+      std::copy_n(walker.path().begin(), remembered, startPath.begin());
+      const UnobstructedStep step = stepUnobstructed(walker, 1.0);
+      const std::size_t held = std::min(step.heldPrefix, remembered);
+      out.cells_.insert(out.cells_.end(), startPath.begin(),
+                        startPath.begin() + static_cast<std::ptrdiff_t>(held));
+    }
+    out.ends_.push_back(static_cast<std::uint32_t>(out.cells_.size()));
+  }
+}
+
+std::vector<std::vector<core::Point>> forecastHolds(Robot robot, std::size_t steps) {
+  ForecastBuffer buffer;
+  forecastHolds(robot, steps, buffer);
+  return buffer.toVectors();
 }
 
 }  // namespace warehousesim::robots

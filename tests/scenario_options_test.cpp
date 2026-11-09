@@ -149,7 +149,9 @@ TEST(ScenarioOptionsTest, ZeroRobotsAndMoreThanTheMaximumAreRefused) {
   options.robots = 1'000'000;
   EXPECT_THROW((void)layoutScenario("fulfilment", options), std::invalid_argument);
   options.robots = kMaxScenarioRobots;
-  EXPECT_NO_THROW((void)layoutScenario("fulfilment", options));
+  EXPECT_THROW((void)layoutScenario("fulfilment", options), std::invalid_argument)
+      << "the maximum is more than the small halls have room for";
+  EXPECT_NO_THROW((void)layoutScenario("large", options));
 }
 
 TEST(ScenarioOptionsTest, ALayoutThatCannotHostASimulationIsStillRefusedWhateverTheOptions) {
@@ -170,6 +172,76 @@ TEST(ScenarioOptionsTest, ARefusedFleetIsRefusedWhenTheFactoryIsMadeNotWhenItIsF
   ScenarioOptions options;
   options.robots = 500;
   EXPECT_THROW((void)mapScenario(layout({"P.D"}), options), std::invalid_argument);
+}
+
+// A robot that is sent to the free charger it is standing on has arrived before it has set out, and
+// the step has nothing left for it to drive. This used to end in an engine error some thousands of
+// ticks into a crowded charger hall.
+TEST(ScenarioOptionsTest, ACrowdedChargerHallRunsForThousandsOfTicksWithoutAnEngineError) {
+  for (const std::uint64_t seed : {5U, 6U}) {
+    ScenarioOptions options;
+    options.robots = 20;
+    options.taskSpawnInterval = 2;
+    Simulation sim = (*layoutScenario("compact", options))(seed);
+    EXPECT_NO_THROW(sim.run(3500)) << "seed " << seed;
+    EXPECT_EQ(sim.tick(), 3500U) << "seed " << seed;
+  }
+}
+
+// ---- the large hall and the planning limits that fit a big hall ---------------------------------
+
+TEST(ScenarioOptionsTest, TheLargeHallIsBuiltForHundredsOfRobotsAndHoldsTheMaximumFleet) {
+  const auto hall = warehousesim::world::makePredefinedWarehouse("large");
+  ASSERT_TRUE(hall.has_value());
+  EXPECT_EQ(hall->width(), 100);
+  EXPECT_EQ(hall->height(), 64);
+  EXPECT_EQ(hall->cellsOfType(CellType::Charging).size(), 147U);
+  EXPECT_EQ(hall->cellsOfType(CellType::Dropoff).size(), 25U);
+  EXPECT_EQ(hall->cellsOfType(CellType::Shelf).size(), 1728U);
+  EXPECT_TRUE(hall->cellsOfType(CellType::Pickup).empty()) << "goods come from beside the shelves";
+  EXPECT_GT(hall->shelfAccessPoints().size(), 1000U);
+
+  ScenarioOptions options;
+  options.robots = kMaxScenarioRobots;
+  Simulation sim = (*layoutScenario("large", options))(1);
+  ASSERT_EQ(sim.robots().size(), kMaxScenarioRobots);
+  const std::vector<Point> starts = startsOf(sim);
+  EXPECT_EQ(std::set<Point>(starts.begin(), starts.end()).size(), starts.size());
+  const auto chargers = hall->cellsOfType(CellType::Charging);
+  for (std::size_t i = 0; i < chargers.size(); ++i) {
+    EXPECT_EQ(starts[i], chargers[i]) << "the charging stations come first";
+  }
+  sim.run(30);  // and it runs
+  EXPECT_EQ(sim.snapshot().robots.size(), kMaxScenarioRobots);
+}
+
+TEST(ScenarioOptionsTest, PlanningLimitsAreMadeToCoverASweepOfAHallTooBigForTheUsualOnes) {
+  using warehousesim::world::Warehouse;
+  // The halls of a few hundred cells keep the limits they were tuned with.
+  for (const char* name : {"demo", "compact", "fulfilment"}) {
+    const Simulation sim = *makeLayoutSimulation(name, 1);
+    EXPECT_EQ(sim.config().planningWorkPerSearch, 1500U) << name;
+    EXPECT_EQ(sim.config().planningWorkPerStep, 4000U) << name;
+  }
+  // 6400 cells: one search must be able to afford the sweep (6400) and an ordinary search (1500),
+  // and a step the same share of its work for each robot.
+  const Simulation large = *makeLayoutSimulation("large", 1);
+  EXPECT_EQ(large.config().planningWorkPerSearch, 7900U);
+  EXPECT_EQ(large.config().planningWorkPerStep, 21066U);
+
+  const auto mapWithCells = [](std::int32_t width, std::int32_t height) {
+    Warehouse w(width, height);
+    w.set(Point{0, 0}, CellType::Pickup);
+    w.set(Point{1, 0}, CellType::Dropoff);
+    return w;
+  };
+  EXPECT_EQ(makeMapSimulation(mapWithCells(100, 100), 1).config().planningWorkPerSearch, 11500U);
+  EXPECT_EQ(makeMapSimulation(mapWithCells(40, 37), 1).config().planningWorkPerSearch, 1500U)
+      << "1480 cells fit in one search already";
+  // Past 40000 cells they stay as they are, which keeps what one step may cost bounded.
+  const Simulation huge = makeMapSimulation(mapWithCells(250, 200), 1);
+  EXPECT_EQ(huge.config().planningWorkPerSearch, 1500U);
+  EXPECT_EQ(huge.config().planningWorkPerStep, 4000U);
 }
 
 // ---- the rate of tasks --------------------------------------------------------------------------

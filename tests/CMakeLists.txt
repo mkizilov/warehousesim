@@ -26,6 +26,8 @@ warehousesim_add_test(warehousesim_world_tests
     layout_check_test.cpp
     layouts_test.cpp
     occupancy_test.cpp
+    point_set_test.cpp
+    thread_pool_test.cpp
     warehouse_test.cpp
     world_model_test.cpp
   LIBS warehousesim::world)
@@ -61,6 +63,7 @@ warehousesim_add_test(warehousesim_planning_tests
   SOURCES
     astar_reference_test.cpp
     astar_scenarios_test.cpp
+    path_batch_test.cpp
     planning_test.cpp
     space_time_astar_test.cpp
   LIBS warehousesim::planning warehousesim::testing)
@@ -122,6 +125,7 @@ warehousesim_add_test(warehousesim_tests
     map_simulation_test.cpp
     metrics_collector_test.cpp
     movement_test.cpp
+    planning_threads_test.cpp
     recording_file_test.cpp
     recording_test.cpp
     replay_test.cpp

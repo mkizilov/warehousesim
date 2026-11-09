@@ -42,8 +42,14 @@ constexpr std::uint64_t kMaxFps = 1000;
 void printUsage(std::ostream& out) {
   out << "usage: warehousesim_gui [--seed N] [--layout NAME | --map FILE] [--tick-ms N]\n"
          "                        [--speed X] [--fps N] [--frames N] [--metrics-csv BASE]\n"
+         "                        [--robots N] [--spawn N] [--threads N]\n"
          "                        [--record FILE [--checkpoint-interval N]]\n"
          "  --map FILE   run a map made with warehousesim_editor instead of a layout\n"
+         "  --robots N   start N robots instead of the layout's usual fleet\n"
+         "  --spawn N    a new random task every N ticks (default 5; 0: none)\n"
+         "  --threads N  plan routes on N worker threads besides the simulation's (default 0); "
+         "the\n"
+         "               run is the same for every N\n"
          "  --record FILE  write a recording of the run (with the commands given to the "
          "interface)\n"
          "               when the window closes; play it back with warehousesim_cli --replay FILE\n"
@@ -71,9 +77,15 @@ int main(int argc, char** argv) {
   std::uint64_t checkpointInterval = warehousesim::simulation::kDefaultCheckpointInterval;
   std::string metricsBase;
   std::string recordFile;
+  std::uint64_t threads = 0;
   bool failed = false;
   for (int i = 1; i < argc && !failed; ++i) {
-    if (warehousesim::apps::readStringOption(argc, argv, i, "--metrics-csv", metricsBase, failed) ||
+    if (warehousesim::apps::readUnsignedOption(argc, argv, i, "--threads", threads, failed) ||
+        warehousesim::apps::readOptionalUnsignedOption(argc, argv, i, "--robots", source.robots,
+                                                       failed) ||
+        warehousesim::apps::readOptionalUnsignedOption(argc, argv, i, "--spawn", source.spawn,
+                                                       failed) ||
+        warehousesim::apps::readStringOption(argc, argv, i, "--metrics-csv", metricsBase, failed) ||
         warehousesim::apps::readStringOption(argc, argv, i, "--record", recordFile, failed) ||
         warehousesim::apps::readUnsignedOption(argc, argv, i, "--checkpoint-interval",
                                                checkpointInterval, failed) ||
@@ -120,6 +132,7 @@ int main(int argc, char** argv) {
         std::move(first),
         std::chrono::milliseconds(static_cast<std::chrono::milliseconds::rep>(tickMs)),
         *made.scenario);
+    runner.usePlanningThreads(static_cast<std::size_t>(threads));
     if (!recordFile.empty()) {
       runner.startRecording(checkpointInterval);
     }

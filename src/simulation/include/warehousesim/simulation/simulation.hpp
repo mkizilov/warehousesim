@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,7 @@
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/core/vec2.hpp"
+#include "warehousesim/planning/path_batch.hpp"
 #include "warehousesim/planning/path_planner.hpp"
 #include "warehousesim/robots/motion.hpp"
 #include "warehousesim/robots/robot.hpp"
@@ -253,6 +255,25 @@ class Simulation {
   void step();
   void run(core::Tick ticks);
 
+  // Plans the independent routes of a step (the ways to the pickups of newly assigned tasks, the
+  // ways to every free charger when a robot needs one) on `workers` threads besides this one, using
+  // planning::PathBatchExecutor. It changes nothing a run computes: every answer is a pure function
+  // of the layout and two cells, and answers are applied here, on this thread, in the order the
+  // questions were asked, so the state after any number of steps (checksum included) is the same
+  // for every number of workers, and a recording made with threads replays without. 0 plans on this
+  // thread alone, as a Simulation does when it is made. Batches smaller than `minParallelQueries`
+  // are not worth waking a thread for and run here either way. Not part of the scenario, so not
+  // recorded. Throws std::invalid_argument for a simulation built with a planner of its own
+  // (whose answers cannot be reproduced on other threads).
+  void usePlanningThreads(std::size_t workers, std::size_t minParallelQueries = 16);
+  [[nodiscard]] std::size_t planningThreads() const noexcept {
+    return executor_ ? executor_->options().workers : 0;
+  }
+  // What the planning threads have been asked, if there are any.
+  [[nodiscard]] std::optional<planning::PathBatchExecutor::Stats> batchStats() const {
+    return executor_ ? std::optional(executor_->stats()) : std::nullopt;
+  }
+
   [[nodiscard]] core::Tick tick() const noexcept { return clock_.tick(); }
   // What this simulation was built from, unchanged by anything that happened since.
   [[nodiscard]] const ScenarioSpec& origin() const noexcept { return origin_; }
@@ -304,7 +325,12 @@ class Simulation {
   void finishLoading(robots::Robot& robot);
   bool dispatchToCharger(robots::Robot& robot);
   [[nodiscard]] std::optional<std::pair<core::Point, robots::RobotPath>> nearestFreeCharger(
-      const robots::Robot& robot) const;
+      const robots::Robot& robot);
+  // Answers the questions into answers_ (one slot each, routes kept), on the planning threads if
+  // there are any, and counts their work as the planner's own.
+  void planRoutes(std::span<const planning::PathQuery> queries);
+  // Everything the planner has expanded so far, however the questions were answered.
+  [[nodiscard]] std::uint64_t plannerWork() const noexcept { return planner_->work() + batchWork_; }
   void breakDownIfDepleted(robots::Robot& robot);
   void moveAlongPath(robots::Robot& robot, const traffic::TrafficPlan& plan);
   [[nodiscard]] std::optional<RobotWait> waitOf(const robots::Robot& robot) const;
@@ -375,6 +401,10 @@ class Simulation {
   std::uint64_t stepWork_ = 0;     // planning work so far in the current step
   std::uint64_t plannerBase_ = 0;  // the planner's work total when the step began
   std::unique_ptr<planning::PathPlanner> planner_;
+  std::unique_ptr<planning::PathBatchExecutor> executor_;  // none: questions are asked of planner_
+  std::vector<planning::PathQuery> queries_;               // scratch for planRoutes
+  std::vector<planning::PathAnswer> answers_;
+  std::uint64_t batchWork_ = 0;  // expansions done by executor_, counted as planner_'s
   std::unique_ptr<tasks::Dispatcher> dispatcher_;
   std::optional<tasks::TaskGenerator> generator_;
   SimulationConfig config_;

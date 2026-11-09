@@ -103,6 +103,14 @@ class SimulationRunner {
   // to ask from any thread.
   [[nodiscard]] std::optional<Recording> recording() const;
 
+  // Plans on `workers` threads besides the worker (see Simulation::usePlanningThreads), now and
+  // after every restart. Changes nothing a run computes. Safe to call at any time from any thread;
+  // throws std::invalid_argument for a simulation with a planner of its own.
+  void usePlanningThreads(std::size_t workers);
+  // What the planning threads have been asked in the run in progress (it starts over with a
+  // restart); nothing if there are none.
+  [[nodiscard]] std::optional<planning::PathBatchExecutor::Stats> planningBatchStats() const;
+
   // The performance figures of the run in progress (since the start, or the last restart): every
   // step the worker has taken, none missed. A copy, safe to read from any thread. Measuring only
   // reads the simulation; a runner's state is the same with or without anyone asking.
@@ -150,6 +158,7 @@ class SimulationRunner {
   std::optional<RunJournal> journal_;  // set while a recording is being kept
   core::Tick checkpointInterval_ = kDefaultCheckpointInterval;
   std::uint64_t restarts_ = 0;
+  std::size_t planningWorkers_ = 0;
   bool stopRequested_ = false;
   bool paused_ = false;
   std::thread worker_;

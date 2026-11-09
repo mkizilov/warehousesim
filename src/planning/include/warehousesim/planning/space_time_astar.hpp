@@ -116,6 +116,10 @@ class SpaceTimeAStar {
   [[nodiscard]] std::int32_t distance(const world::Warehouse& warehouse, core::Point from,
                                       core::Point goal);
 
+  // How many times the map has been swept to make a distance field. A field that is kept and used
+  // again is not swept again, however often it is charged for.
+  [[nodiscard]] std::uint64_t sweeps() const noexcept { return sweeps_; }
+
  private:
   struct Node {
     std::uint32_t stamp = 0;   // generation in which the rest is valid
@@ -129,9 +133,10 @@ class SpaceTimeAStar {
     std::uint32_t id;
   };
   struct Field {
-    std::uint64_t layout;
-    std::size_t goal;
+    std::uint64_t layout = 0;
+    std::size_t goal = 0;
     std::vector<std::int32_t> distance;  // -1: cannot reach the goal
+    std::size_t reached = 0;             // cells with a distance: what a sweep costs
   };
 
   // The cached distances to `goal`, filling the cache first if need be and if `maxWork` (0: no
@@ -144,7 +149,15 @@ class SpaceTimeAStar {
 
   std::vector<Node> nodes_;
   std::vector<OpenEntry> open_;
-  std::vector<Field> fields_;
+  std::vector<Field> fields_;  // oldest first
+  // The (layout, goal) pairs whose sweep counts as already paid for, oldest first: the last few
+  // asked for. A field that is in fields_ but not here is reused, but charged for again.
+  std::vector<std::pair<std::uint64_t, std::size_t>> recent_;
+  std::vector<std::uint32_t> queue_;
+  std::uint64_t sweeps_ = 0;
+  // The Warehouse::version() that fingerprint_ was worked out for.
+  std::uint64_t fingerprintVersion_ = 0;
+  std::uint64_t fingerprint_ = 0;
   std::uint32_t generation_ = 0;
 };
 

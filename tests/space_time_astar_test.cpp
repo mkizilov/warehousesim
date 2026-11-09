@@ -390,6 +390,105 @@ TEST(SpaceTimeAStarTest, ADistanceFieldIsNeverReusedOnAnotherLayout) {
   EXPECT_EQ(planner.search(open, P(0, 0), P(4, 0), 0, script).status, SpaceTimeStatus::Found);
 }
 
+TEST(SpaceTimeAStarTest, EditingALayoutInPlaceMakesEveryEarlierDistanceFieldStale) {
+  Warehouse w = layout({"....."});
+  SpaceTimeAStar planner;
+  EXPECT_EQ(planner.distance(w, P(0, 0), P(4, 0)), 4);
+  w.set(P(2, 0), warehousesim::world::CellType::Wall);
+  EXPECT_EQ(planner.distance(w, P(0, 0), P(4, 0)), -1);
+  EXPECT_EQ(planner.search(w, P(0, 0), P(1, 0), 0, Script{}).status, SpaceTimeStatus::Found);
+  EXPECT_EQ(planner.search(w, P(0, 0), P(4, 0), 0, Script{}).status, SpaceTimeStatus::NoPlan);
+  w.set(P(2, 0), warehousesim::world::CellType::Free);
+  EXPECT_EQ(planner.distance(w, P(0, 0), P(4, 0)), 4);
+  EXPECT_EQ(planner.search(w, P(0, 0), P(4, 0), 0, Script{}).status, SpaceTimeStatus::Found);
+}
+
+// Distances to more goals are kept than are counted as paid for: the work limits were tuned for the
+// last 24, and a field that has dropped out of them is reused but charged for again.
+TEST(SpaceTimeAStarTest, AFieldBeyondTheLastTwentyFourGoalsIsReusedButChargedForAgain) {
+  const Warehouse w = layout({"........", "........", "........", "........"});  // 32 cells
+  std::vector<Point> goals;
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      goals.push_back(P(x, y));
+    }
+  }
+  SpaceTimeAStar planner;
+  EXPECT_EQ(planner.prepare(w, goals[0]), std::optional<std::size_t>(32));
+  EXPECT_EQ(planner.prepare(w, goals[0]), std::optional<std::size_t>(0)) << "paid for";
+  for (std::size_t i = 1; i <= 25; ++i) {
+    EXPECT_EQ(planner.prepare(w, goals[i]), std::optional<std::size_t>(32)) << i;
+  }
+  EXPECT_EQ(planner.prepare(w, goals[25]), std::optional<std::size_t>(0));
+  EXPECT_FALSE(planner.prepare(w, goals[0], 10).has_value()) << "charged again, and refused";
+  EXPECT_EQ(planner.prepare(w, goals[0], 32), std::optional<std::size_t>(32));
+  EXPECT_EQ(planner.prepare(w, goals[0]), std::optional<std::size_t>(0));
+  // However they were kept, the distances are right.
+  for (const Point goal : goals) {
+    EXPECT_EQ(planner.distance(w, P(7, 3), goal),
+              warehousesim::core::manhattanDistance(P(7, 3), goal));
+  }
+}
+
+TEST(SpaceTimeAStarTest, AMapIsSweptOnceForEachGoalForAsLongAsTheFieldsAreKept) {
+  const Warehouse w = layout({"........", "........", "........", "........"});
+  std::vector<Point> goals;
+  for (int y = 0; y < 4; ++y) {
+    for (int x = 0; x < 8 && goals.size() < 30; ++x) {
+      goals.push_back(P(x, y));
+    }
+  }
+  SpaceTimeAStar planner;
+  for (const Point goal : goals) {
+    (void)planner.prepare(w, goal);
+  }
+  EXPECT_EQ(planner.sweeps(), 30U);
+  // Round again: the first six have dropped out of the 24 that count as paid for, so asking for
+  // them is charged, but their fields were kept and nothing is swept.
+  for (const Point goal : goals) {
+    (void)planner.prepare(w, goal);
+  }
+  EXPECT_EQ(planner.sweeps(), 30U);
+  // The same cells are the same layout, however it was made; other cells need their own sweeps.
+  const Warehouse same = layout({"........", "........", "........", "........"});
+  (void)planner.prepare(same, goals.front());
+  EXPECT_EQ(planner.sweeps(), 30U);
+  const Warehouse other = layout({"........", "........", "........", ".......#"});
+  (void)planner.prepare(other, goals.front());
+  EXPECT_EQ(planner.sweeps(), 31U);
+}
+
+// What is kept is bounded in bytes as well: on a map of a quarter of a million cells a field is a
+// megabyte, and thirty-two of them are all that is kept.
+TEST(SpaceTimeAStarTest, ABigMapKeepsFewerFieldsSoThatMemoryStaysBounded) {
+  const Warehouse w(512, 512);
+  SpaceTimeAStar planner;
+  for (int i = 0; i < 40; ++i) {
+    (void)planner.prepare(w, P(i, 0));
+  }
+  EXPECT_EQ(planner.sweeps(), 40U);
+  for (int i = 0; i < 40; ++i) {  // the oldest eight are gone, and asking again goes round the ring
+    (void)planner.prepare(w, P(i, 0));
+  }
+  EXPECT_GT(planner.sweeps(), 40U);
+  EXPECT_EQ(planner.distance(w, P(511, 511), P(0, 0)), 1022);
+}
+
+// On a map so big that 24 fields would not fit in the byte budget, the 24 goals that are charged
+// for are still kept: asking for them again sweeps nothing.
+TEST(SpaceTimeAStarTest, TheGoalsChargedForAreKeptEvenWhenTheyExceedTheByteBudget) {
+  const Warehouse w(700, 600);  // 420 000 cells: 24 fields are 40 MB, more than the 32 MB budget
+  SpaceTimeAStar planner;
+  for (int i = 0; i < 24; ++i) {
+    (void)planner.prepare(w, P(i, 0));
+  }
+  ASSERT_EQ(planner.sweeps(), 24U);
+  for (int i = 0; i < 24; ++i) {
+    (void)planner.prepare(w, P(i, 0));
+  }
+  EXPECT_EQ(planner.sweeps(), 24U);
+}
+
 TEST(SpaceTimeAStarTest, TheSameQueryGivesTheSamePlanOnAReusedAndAFreshPlanner) {
   const Warehouse w = layout({"........", ".##..##.", "........", ".##..##.", "........"});
   Script script;

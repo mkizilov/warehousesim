@@ -223,9 +223,44 @@ void Simulation::spawnTask() {
   }
 }
 
+void Simulation::usePlanningThreads(std::size_t workers, std::size_t minParallelQueries) {
+  if (workers == 0) {
+    executor_.reset();
+    return;
+  }
+  if (!defaultComponents_) {
+    throw std::invalid_argument(
+        "a simulation with a planner of its own cannot plan on other threads");
+  }
+  executor_ = std::make_unique<planning::PathBatchExecutor>(
+      planning::PathBatchExecutor::Options{workers, minParallelQueries});
+}
+
+void Simulation::planRoutes(std::span<const planning::PathQuery> queries) {
+  if (executor_) {
+    executor_->run(world_.layout(), queries, answers_, true);
+    for (const planning::PathAnswer& answer : answers_) {
+      batchWork_ += answer.expansions;
+    }
+    return;
+  }
+  answers_.resize(queries.size());
+  for (std::size_t i = 0; i < queries.size(); ++i) {
+    auto path = planner_->findPath(world_.layout(), queries[i].start, queries[i].goal, {});
+    answers_[i].status = path ? planning::SearchStatus::Found : planning::SearchStatus::Unreachable;
+    answers_[i].path = path ? std::move(*path) : planning::Path{};
+  }
+}
+
 // Asks the dispatcher for a plan and applies it. The plan is only a proposal: a task is handed out
 // only if the queue still lets this robot claim it, and only to a robot that is still available,
 // so a faulty dispatcher still cannot give one task to two robots or two tasks to one robot.
+//
+// The way to each pickup is worked out for all the assignments together (on the planning threads,
+// if there are any) and applied in the order of the plan. A robot is given at most one task in a
+// step: a second assignment for it in the same plan is passed over, as it would be once the first
+// had been applied, except that a first whose pickup turns out to be out of reach does not free the
+// robot for it.
 void Simulation::assignTasks() {
   const tasks::DispatchPlan plan = dispatcher_->plan(world_.layout(), robots_, tasks_);
 
@@ -236,18 +271,38 @@ void Simulation::assignTasks() {
     }
   }
 
+  struct Claim {
+    core::RobotId robot;
+    core::TaskId task;
+    Point pickup;
+  };
+  std::vector<Claim> claims;
+  queries_.clear();
   for (const tasks::Assignment& assignment : plan.assignments) {
-    Robot& robot = robotById(assignment.robot);
-    if (!robot.isAvailable() || !tasks_.tryAssign(assignment.task, assignment.robot)) {
+    const Robot& robot = robotById(assignment.robot);
+    const bool claimedAlready = std::any_of(claims.begin(), claims.end(), [&](const Claim& claim) {
+      return claim.robot == assignment.robot;
+    });
+    if (!robot.isAvailable() || claimedAlready ||
+        !tasks_.tryAssign(assignment.task, assignment.robot)) {
       continue;
     }
     const Point pickup = tasks_.find(assignment.task)->pickup;
-    auto path = planner_->findPath(world_.layout(), robot.position(), pickup, {});
-    if (!path) {
-      tasks_.fail(assignment.task);
+    claims.push_back({assignment.robot, assignment.task, pickup});
+    queries_.push_back({robot.position(), pickup});
+  }
+  if (claims.empty()) {
+    return;
+  }
+
+  planRoutes(queries_);
+  for (std::size_t i = 0; i < claims.size(); ++i) {
+    if (!answers_[i].found()) {
+      tasks_.fail(claims[i].task);
       continue;
     }
-    robot.beginTask(assignment.task, pickup, std::move(*path));
+    Robot& robot = robotById(claims[i].robot);
+    robot.beginTask(claims[i].task, claims[i].pickup, std::move(answers_[i].path));
     progress_.reset(robot.id());
   }
 }
@@ -428,18 +483,26 @@ bool Simulation::dispatchToCharger(Robot& robot) {
 
 // The charger with the shortest path from the robot that no other robot is standing on.
 std::optional<std::pair<Point, robots::RobotPath>> Simulation::nearestFreeCharger(
-    const Robot& robot) const {
-  std::optional<std::pair<Point, robots::RobotPath>> best;
+    const Robot& robot) {
+  // The way to every charger that is not taken, all asked at once: with many chargers this is the
+  // biggest batch of independent questions a step can hold.
+  queries_.clear();
   for (const Point charger : chargers_) {
-    if (world_.isOccupied(charger) && charger != robot.position()) {
-      continue;
-    }
-    auto path = planner_->findPath(world_.layout(), robot.position(), charger, {});
-    if (path && (!best || path->size() < best->second.size())) {
-      best.emplace(charger, std::move(*path));
+    if (!world_.isOccupied(charger) || charger == robot.position()) {
+      queries_.push_back({robot.position(), charger});
     }
   }
-  return best;
+  planRoutes(queries_);
+  std::optional<std::size_t> best;
+  for (std::size_t i = 0; i < queries_.size(); ++i) {
+    if (answers_[i].found() && (!best || answers_[i].path.size() < answers_[*best].path.size())) {
+      best = i;
+    }
+  }
+  if (!best) {
+    return std::nullopt;
+  }
+  return std::pair<Point, robots::RobotPath>(queries_[*best].goal, std::move(answers_[*best].path));
 }
 
 // A robot with an empty battery cannot do anything, except sit on a charger and recharge.
@@ -494,8 +557,13 @@ void Simulation::moveAlongPath(Robot& robot, const traffic::TrafficPlan& plan) {
           }
         }
         if (!freed) {
-          (void)robot.advance(0.0);  // waits where it is
-          heldBack_[robot.id().value - 1] = round == 0;
+          // Resolving the block can leave the robot with nothing to follow: it was sent to the free
+          // charger it stands on (it has arrived), or its way was cut off and it stood down.
+          const bool following = robot.hasPath();
+          if (following) {
+            (void)robot.advance(0.0);  // waits where it is
+          }
+          heldBack_[robot.id().value - 1] = following && round == 0;
           return;
         }
       }

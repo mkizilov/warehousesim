@@ -16,11 +16,11 @@ core ← robots ──────────┴← tasks ┐
 
 | Module       | Contents                                                                  |
 |--------------|---------------------------------------------------------------------------|
-| `core`       | `Point`, strong ids, `SimClock`/`Tick`, seedable `Rng` (SplitMix64)       |
+| `core`       | `Point`, strong ids, `SimClock`/`Tick`, seedable `Rng` (SplitMix64), `PointSet`, `ThreadPool` (bounded, safe shutdown) |
 | `world`      | grid model, occupancy, predefined layouts (see below); no SDL or JSON     |
 | `robots`     | `Robot` entity: pose, speed, battery, task, path and an explicit state machine; `forecastHolds()` |
 | `traffic`    | space-time `ReservationTable` and the `TrafficController` that fills it (see Collision avoidance) |
-| `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning) |
+| `planning`   | `PathPlanner` interface, deterministic 4-connected A* (see Path planning), `PathBatchExecutor`: many independent path questions on a thread pool (see Performance and planning threads) |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, greedy `Dispatcher`, distance estimators, seeded `TaskGenerator` |
 | `testing`    | header-only test/benchmark support: reference BFS, map generators, allocation counter |
 | `metrics`    | simulated performance figures from plain observations: aggregation, derived rates, CSV and dashboard text (see Performance metrics); depends on `core` only |
@@ -62,7 +62,10 @@ The `world` module is independent of SDL, JSON and the simulation (its tests bui
   (turning an occupied cell into an obstacle is refused).
 - **Predefined layouts** (`world::predefinedLayouts()`, also `--layout` in the apps):
   `demo` (20x12 open hall), `compact` (12x8 walled room, all six cell types), `fulfilment` (28x16 walled
-  hall: pickup column, dropoff row, chargers, six shelf rows).
+  hall: pickup column, dropoff row, chargers, six shelf rows), `large` (100x64 walled hall with two-cell
+  aisles, 147 chargers and 25 dropoffs, built for fleets of a hundred robots and more; `--robots` chooses
+  the fleet, up to 512). A `Warehouse` also has a `version()`: it changes with every `set()` and is shared
+  by copies, so that a cache can tell without looking at every cell that a layout cannot have changed.
 - **Readiness:** `world::checkLayout()` says whether a layout can host a simulation: it needs a walkable
   cell, a dropoff and a source of goods (a pickup, or a free cell beside a shelf), and it warns if the
   walkable cells fall into separate regions. `world::kMaxMapSide` (512) is the longest side accepted for
@@ -80,6 +83,8 @@ build/default/apps/warehousesim_editor --file my-hall.json               # edit 
 build/default/apps/warehousesim_cli --map my-hall.json --ticks 500       # run a map made with it
 build/default/apps/warehousesim_cli --layout compact --ticks 3000 --metrics --metrics-csv out/compact
 build/release/bench/warehousesim_fleet_bench                              # layouts x fleet sizes x seeds
+build/default/apps/warehousesim_cli --layout large --robots 100 --spawn 1 --ticks 300 --threads 2   # 100 robots, 2 planning threads
+build/release/bench/warehousesim_scaling_bench                            # wall-clock cost of a step, with and without threads
 build/default/apps/warehousesim_cli --layout compact --ticks 600 --seed 7 --record run.json   # also write down the run
 build/default/apps/warehousesim_cli --replay run.json                    # play it back and check it
 ```
@@ -92,6 +97,13 @@ exit status 1; an unknown layout or conflicting options exit with status 2.
 100 ms of real time at speed 1), `--speed X` (initial playback speed, 1/16 to 64), `--fps N` (frame cap,
 default 60), `--frames N` (exit after N frames; 0 = until closed), `--metrics-csv BASE` (where `E` writes
 the performance figures; the folder of BASE must exist).
+
+`warehousesim_cli` and `warehousesim_gui` also take `--robots N` (a fleet of N instead of the layout's usual
+four or fewer, 1 to 512, as many as the layout has room for), `--spawn N` (a new random task every N ticks;
+default 5; 0 for none) and `--threads N` (plan routes on N worker threads besides the stepping one; the run
+is the same for every N, see Performance and planning threads). `--robots` and `--spawn` belong to the
+scenario, so a `--replay` takes them from the file and refuses them on the command line; `--threads` is
+allowed with `--replay` because it only changes how long the replay takes.
 
 `warehousesim_cli` also takes `--metrics` (print the simulated performance dashboard to stderr after the
 run; the JSON on stdout is the same with or without it) and `--metrics-csv BASE` (write the three CSV files),
@@ -791,6 +803,219 @@ robots draw power in the model (idle drain 1 per tick).
   chart and the series CSV use them.
 - A restart or a different seed is a different run: the figures start over, they are never carried across.
 
+## Performance and planning threads
+
+This section is about how long the program takes to compute, not about simulated results: everything in
+it is a wall-clock time or a count of what the program did. The times are from one machine (Apple M4,
+10 hardware threads), built by hand with Apple clang 21 at `-O3 -DNDEBUG` (CMake was not available in the
+sandbox this was written in, so not the CMake Release preset), and are medians of the number of runs
+stated. They say nothing about real robots or other machines; rerun `warehousesim_scaling_bench` on a
+Release build to get your own.
+
+### How it was measured
+
+A small sampling profiler (a `SIGPROF` timer and `backtrace`, in a scratch driver that is not part of the
+repository, because the system's `sample` tool gave nothing in the sandbox) on a build with `-O2` and frame
+pointers; percentages are shares of the samples on the stepping thread. Allocations were counted by
+replacing `operator new` in a scratch driver, after 500 warm-up steps. Timings are the median of five
+runs of the old and the new engine, alternated on the same configurations and the same planning limits;
+every pair was checked to end in the same state (tasks done and failed, and the state checksum).
+
+### What the profile showed, and what was done
+
+The hall used is the new `large` layout (100x64, 6400 cells) with 128 robots and a task every tick, which
+keeps the fleet busy. "Before" is the engine of the previous commit with the `large` layout added and the
+engine error below fixed (both needed to run these cases at all).
+
+The profile of the engine as it was (6 000 steps, 1.15 ms a step), and what each finding led to:
+
+| Cost centre | Share of a step | What was done |
+|---|---:|---|
+| `SpaceTimeAStar::distanceField`, itself: it hashed every cell of the layout on each lookup to tell whether the layout had changed | 24 % | `Warehouse::version()` names the layout as it is; the hash is only made again after an edit |
+| `ReservationTable::release` and `check`: release walked every cell that held anything and the whole `std::map` of edges; every question built a `Conflict` | 14 % and 9 % | per-robot lists of what it holds; edges in flat per-cell arrays instead of a `std::map`; `isFree` and `isTraversable` answer yes or no without building a `Conflict` |
+| Heap allocation (`operator new` and the allocator under it) | 15 % | see the allocation table below: 91 times fewer allocations |
+| `forecastHolds`: a copy of the robot and a vector of vectors for each forecast, several forecasts per robot per step | 13 % | a reusable `ForecastBuffer` and working copy, request buffers kept between calls |
+| Repeated grid queries: the dispatcher ran one A* for each (robot, pickup) pair, the charger search one for each charger | 5 % in A* | one breadth-first sweep from the goal serves every start (`PathDistance`, with an open-addressing table); space-time distance fields are kept for up to 512 goals (at most 32 MB) and are still *charged* for exactly as before, so the planning limits mean what they meant |
+| Blocked-cell sets (`std::unordered_set<Point>`, one allocation for each cell, built for most questions) | 2 % | `core::PointSet`: two allocations however many cells, and it walks its points in the order they were inserted |
+| Route counts of the traffic controller (`std::unordered_map`) | under 1 % | an array indexed by cell |
+| Everything else: the dispatcher, motion, world claims | small | left alone |
+
+What was left of a step in a profile taken once the single-thread changes were in (20 000 steps on the
+same hall and fleet, old limits, 0.16 ms a step): the traffic controller planning each robot in priority order 55 % (forecasting 23 %,
+table checks and reservations 20 %), A* for new routes 13 %, `nearestFreeCharger` 8 %, the dispatcher 7 %,
+the sweeps for distance fields 6 %. Almost all of it has to happen in order: each robot plans against the
+reservations of the robots before it.
+
+**Heap allocations per step**, same runs, same planning limits:
+
+| Case | Before | After |
+|---|---:|---:|
+| `compact`, 20 robots | 3 533 allocations, 428 kB | 119 allocations, 6.5 kB |
+| `fulfilment`, 24 robots | 3 034 allocations, 372 kB | 96 allocations, 5.0 kB |
+| `large`, 128 robots | 17 247 allocations, 2.0 MB | 189 allocations, 46 kB |
+| `large`, 256 robots | 37 052 allocations, 4.6 MB | 441 allocations, 154 kB |
+
+The changes behind it: forecasts and the requests built from them go into buffers that are kept between
+calls; the traffic controller's route counts are an array instead of an `unordered_map`; blocked cells are a
+`core::PointSet` (two allocations however many cells, instead of one per cell); `PathDistance` keeps its
+answers in one open-addressing table; the cells to steer clear of are made only when a plan falls short of
+its destination and needs them.
+
+**Single-thread speed**, the same simulation as `warehousesim_cli` runs (in a scratch driver), median of
+five, with the planning limits the engine always had (1 500 work per search, 4 000 per step). "Same run"
+means the same tasks done and failed and the same state checksum:
+
+| Case | Before ms/step | After ms/step | Faster | Same run |
+|---|---:|---:|---:|---|
+| `demo`, 4 robots | 0.015 | 0.006 | 2.5x | yes |
+| `compact`, 20 robots | 0.120 | 0.061 | 2.0x | yes |
+| `fulfilment`, 16 robots | 0.092 | 0.038 | 2.4x | yes |
+| `fulfilment`, 24 robots | 0.156 | 0.070 | 2.2x | yes |
+| `large`, 64 robots | 0.528 | 0.142 | 3.7x | yes |
+| `large`, 100 robots | 0.959 | 0.233 | 4.1x | yes |
+| `large`, 128 robots | 1.320 | 0.297 | 4.4x | yes |
+| `large`, 192 robots, a task every 2 ticks | 1.223 | 0.200 | 6.1x | yes |
+| `large`, 256 robots | 2.929 | 0.492 | 6.0x | yes |
+
+And with the limits the `large` hall gets (below), where robots really do search for ways round each other:
+
+| Case | Before ms/step | After ms/step | Faster | Same run |
+|---|---:|---:|---:|---|
+| `large`, 100 robots | 1.396 | 0.291 | 4.8x | yes |
+| `large`, 128 robots | 1.956 | 0.386 | 5.1x | yes |
+| `large`, 128 robots, a task every 5 ticks | 0.539 | 0.144 | 3.7x | yes |
+| `large`, 256 robots | 3.550 | 0.664 | 5.3x | yes |
+| `large`, 256 robots, a task every 2 ticks | 2.028 | 0.455 | 4.5x | yes |
+
+Nothing about what a run computes changed: the three bundled halls give byte-identical output and
+recordings to the previous commit (3 layouts x 4 seeds x 2 000 steps), and a recording made by the previous
+engine replays on this one. The one exception is the new `large` layout, which has no history.
+
+**Planning limits for a big hall.** A search in space and time starts from the distance from every cell to
+its goal, a sweep that costs a cell of work for each cell, and the usual limit for one search is 1 500. On
+a hall of more than 1 500 cells no search could ever begin, and on `large` robots never looked for a way
+round each other (every search ended "out of budget"). A scenario on a hall of 1 501 to 40 000 cells now
+adds the sweep to the limit of one search and scales the limit of a step the same way (`large`: 7 900 and
+21 066). The bundled small halls keep their limits. On `large` with 128 robots, over 3 000 steps with seeds
+1 and 2, tasks done went from 1 257 and 1 186 to 1 485 and 1 545, and tasks failed from 35 and 34 to 15
+and 1.
+
+**An engine error found on the way.** A robot sent to the free charger it was standing on has arrived
+before it sets out; the step then had nothing to drive and threw `InvalidTransition: the robot has no path to
+follow`. It showed after about a thousand steps with 128 robots on `large` (seeds 1 and 2: steps 1 056 and
+862), and also on `compact` with 20 robots and a task every 2 ticks (seed 5, step 3 031); runs that did not
+throw are unchanged. Fixed in
+`Simulation::moveAlongPath`, with a regression test.
+
+### Planning threads
+
+`--threads N` (CLI and GUI; `Simulation::usePlanningThreads(N)`, `SimulationRunner::usePlanningThreads(N)`,
+`ReplayOptions::planningThreads`) lets the independent path questions of a step be answered by N worker
+threads besides the stepping one. They are the ways to the pickups of the tasks assigned in the step, the
+ways to every free charger when a robot needs one, and the routes repaired after `placeObstacle`. Each is a
+function of the layout and two cells, nothing else.
+
+- **Immutable snapshot.** `planning::PathBatchExecutor` answers from a private copy of the layout, taken
+  when `Warehouse::version()` changes. The caller can go on editing its own between batches.
+- **One planner per thread.** The stepping thread and each worker have an `AStarPlanner` (and its scratch
+  memory) of their own; the only shared writes are the answer slots, one per question.
+- **One path by which state changes.** A worker never touches a `Simulation`. The stepping thread applies the
+  answers itself, in the order the questions were asked, so the state after any number of steps does not
+  depend on how the work was shared out. The expansions a batch made are added to the planner's own
+  count (it is part of the state checksum), so even that is the same for every thread count.
+- **Bounded pool.** `core::ThreadPool` has a fixed number of threads and a bounded queue (`submit` waits while
+  it is full). `shutdown()` and the destructor refuse new tasks, wake any producer that is waiting, run what
+  was already accepted and join; calling `parallelFor` or `shutdown` from one of the pool's own tasks throws
+  instead of deadlocking; if calls of a `parallelFor` throw, the exception of the lowest index is rethrown
+  after the others have run. The runner joins its planning threads when it is destroyed or restarted.
+- **Not part of the scenario.** The thread count is not recorded and changes no checksum: a recording made on
+  one number of threads replays on any other.
+- Batches smaller than 16 questions stay on the stepping thread (`minParallelQueries`): between 1 and 32
+  made no measurable difference to a step, 64 and more gave back part of the gain.
+
+What it checks: `PlanningThreadsTest` compares every tick of runs on 0, 1, 2 and 3 threads on three halls,
+a hundred robots on `large`, obstacles placed and cleared in the middle of a run, a change of the thread
+count in the middle of a run, and recordings made and replayed on different counts; the runner tests start
+and stop runners with threads over and over; the suites are clean under ASan, UBSan and TSan. The pool's
+tests were also run against deliberately broken pools (a producer never woken, workers that drop queued
+tasks, two threads joining the same worker, an unlocked read), and every one is caught.
+
+**What it gives.** `warehousesim_scaling_bench` on the final code (`large`, a task every tick, seed 1,
+1 500 steps per sample, median of 3; "planning threads" are besides the stepping thread; the state checksum
+is the same for every thread count and the benchmark fails if it is not):
+
+| robots | planning threads | ms / step | speed-up | batches / step | questions / batch |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 0 | 0.290 | 1.00x | - | - |
+| 100 | 1 | 0.277 | 1.05x | 0.50 | 24.6 |
+| 100 | 2 | 0.276 | 1.05x | 0.50 | 24.6 |
+| 128 | 0 | 0.372 | 1.00x | - | - |
+| 128 | 1 | 0.356 | 1.04x | 0.60 | 24.6 |
+| 128 | 2 | 0.350 | 1.06x | 0.60 | 24.6 |
+| 256 | 0 | 0.770 | 1.00x | - | - |
+| 256 | 1 | 0.751 | 1.03x | 0.90 | 20.3 |
+| 256 | 2 | 0.745 | 1.03x | 0.90 | 20.3 |
+
+The gain on a whole step is small: 3 to 6 %, and an earlier complete run gave 1 to 6 %. The profile
+says why: about 7 % of a step is spent on questions that can be answered independently, so even free
+threads could not give more than that (Amdahl); the rest is the traffic controller and the cooperative
+search, which plan robot after robot against each other's reservations. Dropping an obstacle on the busiest
+cell of a fleet of 100 to 256 robots repairs 7 to 11 routes, below the batch size worth sending to the pool, so
+there is nothing to gain there either (0.96x to 1.04x, which is noise):
+
+| robots | planning threads | ms / obstacle | routes repaired | speed-up |
+|---:|---:|---:|---:|---:|
+| 100 | 0 / 1 / 2 | 0.083 / 0.084 / 0.087 | 7.5 | 1.00x / 0.99x / 0.96x |
+| 128 | 0 / 1 / 2 | 0.101 / 0.098 / 0.099 | 9.3 | 1.00x / 1.04x / 1.02x |
+| 256 | 0 / 1 / 2 | 0.102 / 0.101 / 0.103 | 10.8 | 1.00x / 1.00x / 0.98x |
+
+Where the pool does pay is when there is a lot of independent work at once, which is what a batch of
+routes is. Raw batches of random questions on the same hall (200 batches per case, same routes as with no
+threads in every case):
+
+| questions / batch | 0 threads us | 1 thread us | 2 threads us | speed-up with 1 / 2 |
+|---:|---:|---:|---:|---:|
+| 16 | 27.0 | 14.1 | 17.2 | 1.91x / 1.57x |
+| 64 | 112.6 | 57.0 | 51.4 | 1.98x / 2.19x |
+| 256 | 677.5 | 324.6 | 233.8 | 2.09x / 2.90x |
+| 1 024 | 3 439.7 | 1 808.4 | 1 216.1 | 1.90x / 2.83x |
+
+With two workers and the calling thread that is 2.8 to 2.9x on three threads for batches of 256 or more.
+So the feature is real and safe, and worth turning on for a use that asks many routes at once; for a
+simulation step as it is today it is a small, free gain, not a fix. Only up to two workers were used
+(the project limit for build and test workers); how it scales further is not measured.
+
+### Rendering
+
+The main thread's work for a frame before a pixel is drawn (the runner's last two states, blended by how
+far real time has got, turned into draw commands for a 1280x720 window with routes and held cells shown),
+on the same busy fleets, median of 200 frames:
+
+| robots | `frame()` us | blend us | scene us | draw commands | share of a 60 fps frame |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 4.9 | 4.4 | 69.0 | 8 328 | 0.47 % |
+| 128 | 6.1 | 6.4 | 72.2 | 9 714 | 0.51 % |
+| 256 | 8.8 | 16.2 | 74.0 | 9 862 | 0.59 % |
+
+The stepping thread pays 5 to 10 microseconds per step to publish its state under the lock. This is far
+from a bottleneck, so the view code was left alone. Executing 8 000 to 10 000 draw commands is SDL's, and
+cannot be measured without a window: that part is **not measured**. The runner now takes one snapshot
+per step, not two: the state before the last step is the one it already holds.
+
+### Limits
+
+- Planning threads give 3 to 6 % on a whole step here; most of a step is ordered by priority and cannot be
+  shared out without changing what the simulation computes.
+- The next cheap gain is known and **not taken**: the nearest free charger could be found with one sweep
+  from the robot instead of one A* for each charger (8 % of a step on `large`, which has 147). It would
+  change the expansions counted as planning work, which are in the state checksum and the JSON, so it is a
+  change of the engine (raise `kEngineRevision`, regenerate the fixtures) and was left for a change that
+  means to do that.
+- Memory: a space-time planner keeps distance fields for up to 512 goals and 32 MB; `PathDistance` keeps 32
+  fields (about 33 MB on a 512x512 map). Before, the estimator kept no fields.
+- The numbers are from one machine, one compiler and a hand-built `-O3`, for two worker threads at most.
+  CMake, the CI jobs and `clang-tidy` could not be run where this was written.
+
 ## Recording and replay
 
 A run can be written down and played again, step for step, from its initial state, and the replay says
@@ -884,10 +1109,10 @@ Everything but `scenario` and `ticks` may be left out of a file made by hand. Co
 | Random numbers | the task generator | only `core::Rng` (SplitMix64: its output is fully specified, unlike `std::*_distribution`), seeded by `config.seed`, recorded; no `std::rand` or `std::random_device`. The stream's state is in the checksum, so a different seed is seen at tick 0 |
 | Wall-clock time, thread schedule | the runner steps in real time; clicks arrive whenever | the simulation never reads a clock. Steps are whole and fixed. Commands are applied only *between* steps, one at a time, in the order posted, and recorded with the tick they landed on: the timing decides *which* tick, and the recording keeps it. Pause, speed, frame rate, zoom and selection are not commands and never reach the state (`PausingAndChangingTheSpeed...`, `FleetDeterminismTest`) |
 | Floating point | the motion model uses `double` | only exactly specified IEEE-754 operations (`+ - * /`, `sqrt`, `fmod`, `floor`, `ceil`, `fabs`); no `-ffast-math`, and `-ffp-contract=off` so that no fused multiply-add changes a result; no libm transcendental in the simulation (`sin`, `cos`, `pow` are in the view code only). The checksum takes the bits |
-| Container order | hash containers | no decision depends on the iteration order of an `unordered_*`: they are only looked up (the traffic controller's route counts, the distance estimator's cache, the metrics accumulator's cell index, the planner's blocked set) or walked once to mark cells, where order cannot matter (the blocked set). Everything else is a `vector`, a `deque` or an ordered container, and ties are broken by id, never by position in memory |
+| Container order | hash containers | no decision depends on the iteration order of an `unordered_*`: the few left are only looked up (the metrics accumulator's cell index, the reservation table's per-robot lists by robot id). The planner's blocked set is a `core::PointSet`, which walks its points in the order they were inserted, the same on every platform; the traffic controller's route counts and the distance estimator's answers are arrays and an open-addressing table that are only looked up. Everything else is a `vector`, a `deque` or an ordered container, and ties are broken by id, never by position in memory |
 | Memory addresses, uninitialised memory | ordering or hashing by pointer; an unset member | nothing is ordered or hashed by address; members are initialised; the suites run clean under ASan, UBSan and TSan |
 | Integer width, byte order, locale | the checksum, the file | fixed-width types and a little-endian byte stream; numbers in the file are written locale-independently, doubles with the shortest text that reads back to the same bits (`EveryFieldOfTheConfigurationSurvivesTheRoundTrip`) |
-| Parallelism | none inside a simulation (it is single-threaded); several replays at once | a replay shares no state with another (`ReplaysOnOtherThreads...`, run under TSan) |
+| Parallelism | planning threads (`--threads`); several replays at once | the threads only answer questions that are a function of the layout and two cells; the stepping thread applies the answers in the order asked, so no thread count changes a state, a checksum or a recording (`PlanningThreadsTest`, run under TSan; see Performance and planning threads). A replay shares no state with another (`ReplaysOnOtherThreads...`) |
 | Things done to the simulation that the recording does not know | a wall put up, a robot disabled, a task made, before recording began; a planner or dispatcher of one's own | `RunJournal` compares the simulation with what its origin builds and refuses to start on any difference; it refuses a simulation built with its own planner or dispatcher, because a replay builds the default ones |
 | The engine itself changing | a new release | the `engine` revision, a pinned checksum (`ThePinnedScenarioHasThePinnedChecksums`) and a recording made earlier that must keep replaying (`ARecordingMadeEarlierStillReplays...`) force a deliberate change to be made on purpose; a recording of another revision that diverges says so |
 

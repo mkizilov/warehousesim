@@ -54,9 +54,15 @@ class Warehouse {
 
   [[nodiscard]] std::vector<std::string> toRows() const;
 
+  // Names the layout as it is now: equal for a layout and its copies, and different, process-wide,
+  // after every set(). Two layouts with the same version have the same cells; the converse need not
+  // hold. For caches that would otherwise have to look at every cell to know that nothing changed.
+  [[nodiscard]] std::uint64_t version() const noexcept { return version_; }
+
  private:
   GridSize size_;
   std::vector<CellType> cells_;
+  std::uint64_t version_;
 };
 
 }  // namespace warehousesim::world

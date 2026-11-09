@@ -200,6 +200,9 @@ class Robot {
   // it had to stop there (see forecastHolds). Never cuts below the cells the robot already holds,
   // so the copy is always consistent.
   [[nodiscard]] Robot withRouteCutTo(std::size_t pathCells) const;
+  // Makes this robot a copy of `source` with its route cut as withRouteCutTo() does, reusing this
+  // robot's storage: for a working copy that is kept between questions. Never for a real robot.
+  void assignRouteCutOf(const Robot& source, std::size_t pathCells);
 
   // Forced one-cell move to an adjacent cell to make room for another robot. Only a robot that
   // is at rest with no authority and not in a stationary state can be moved. The old path is
@@ -229,6 +232,7 @@ class Robot {
   // Index of the first path cell, within the first `scanLimit`, at which the robot has to stop:
   // the end of the path, or a corner if it cannot turn while moving. `scanLimit` if none.
   [[nodiscard]] std::size_t mandatoryStopIndex(std::size_t scanLimit) const;
+  void cutRouteTo(std::size_t pathCells);
 
   core::RobotId id_;
   core::Point position_;

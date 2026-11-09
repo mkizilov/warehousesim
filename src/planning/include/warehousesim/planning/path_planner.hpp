@@ -2,16 +2,16 @@
 
 #include <cstdint>
 #include <optional>
-#include <unordered_set>
 #include <vector>
 
 #include "warehousesim/core/point.hpp"
+#include "warehousesim/core/point_set.hpp"
 #include "warehousesim/world/warehouse.hpp"
 
 namespace warehousesim::planning {
 
 using Path = std::vector<core::Point>;
-using BlockedSet = std::unordered_set<core::Point, core::PointHash>;
+using BlockedSet = core::PointSet;
 
 // Finds routes through a warehouse layout. Planners know only the static layout and an optional
 // set of temporarily blocked cells (typically cells other robots stand on); they have nothing to

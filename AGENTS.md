@@ -25,21 +25,21 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
 
 | Module       | Responsibility                                        | May depend on                        |
 |--------------|-------------------------------------------------------|--------------------------------------|
-| `core`       | points, ids, clock, deterministic RNG                 | std only                             |
-| `world`      | grid model: cell types, static layout, robot occupancy (cell plus claimed cells), predefined layouts, `checkLayout` (can it host a simulation?) | core |
+| `core`       | points, ids, clock, deterministic RNG, `PointSet`, `ThreadPool` (bounded, safe shutdown) | std only (and threads) |
+| `world`      | grid model: cell types, static layout, robot occupancy (cell plus claimed cells), predefined layouts (`demo`, `compact`, `fulfilment`, and `large`, 100x64, for fleets of hundreds), `Warehouse::version()`, `checkLayout` (can it host a simulation?) | core |
 | `robots`     | robot entity: pose, motion model, battery, task, path, state machine | core                  |
-| `planning`   | `PathPlanner` interface, A* with options, results, reused workspace; space-time A* (`SpaceTimeAStar`) behind a `SpaceTimeConstraints` interface | core, world |
+| `planning`   | `PathPlanner` interface, A* with options, results, reused workspace; space-time A* (`SpaceTimeAStar`) behind a `SpaceTimeConstraints` interface; `PathBatchExecutor` (many independent path questions on a `ThreadPool`) | core, world |
 | `tasks`      | `TaskQueue` lifecycle and exclusive claims, `Dispatcher` (greedy), distance estimators, task generation | core, world, robots, planning |
 | `traffic`    | space-time `ReservationTable`, `TrafficController` (collision avoidance), `CooperativeRouter` (prioritized planning), `ProgressMonitor` (blocking and deadlock detection) | core, world, robots, planning |
 | `metrics`    | simulated performance figures: `MetricsAccumulator` (plain observations in), `FleetMetrics` (counts and derived rates), CSV and dashboard text | core only |
-| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps, run recording and replay (`RunJournal`, `Recorder`, `replay`, the recording file, `stateChecksum`) | all of the above, metrics, nlohmann_json |
+| `simulation` | tick engine, runner thread and command queue (`Command`, `apply`), JSON, scenarios (`ScenarioOptions`), `MetricsCollector`, benchmark sweeps, run recording and replay (`RunJournal`, `Recorder`, `replay`, the recording file, `stateChecksum`), planning threads (`usePlanningThreads`) | all of the above, metrics, nlohmann_json |
 | `testing`    | header-only test/bench support: reference BFS, map generators, allocation counter | planning (types only) |
 | `mapio`      | the versioned JSON map file: schema validation, reading, canonical writing | core, world, nlohmann_json (private) |
 | `editor`     | `MapEditor` editing model (tools, strokes, undo, resize), `editor_files` (save/load/predefined) | core, world, mapio (private) |
 | `view`       | camera, scenes (draw lists), interpolation, input -> view logic (`ViewController`, `FleetController`, `FleetSession`, `EditorController`); no SDL | core, world, simulation, editor |
 | `rendering`  | SDL3 window: events in, draw list out (GUI only)      | view, SDL3                           |
 
-`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning and fleet benchmarks.
+`apps/cli` (headless), `apps/gui` (SDL3, the fleet interface) and `apps/editor` (SDL3) are thin `main()`s. Tests are in `tests/`; `bench/` holds the planning, fleet and scaling benchmarks.
 
 ### Clean architecture
 
@@ -201,7 +201,8 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
     makes it differ. It hashes `double` bit patterns, so the arithmetic must stay exact IEEE:
     `-ffp-contract=off`, no fast-math, and no libm transcendental (`sin`, `cos`, `pow`, `atan2`, ...) in
     `src/` outside `view`. Never decide anything from the iteration order of an `unordered_*` or from an
-    address, and never let a clock, a thread or a file reach `Simulation`.
+    address, and never let a clock or a file reach `Simulation`; a thread reaches it only the way the planning
+    threads rule below allows.
   - Changing what a simulation computes on purpose means, in the same change: raising `kEngineRevision`,
     updating `ThePinnedScenarioHasThePinnedChecksums` and regenerating the fixture `kEarlierRecording` in
     `replay_test.cpp`. A change that needs neither is behaviour-preserving, which is what to aim for.
@@ -214,6 +215,36 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   - `replay()` throws for no recording, compares as it goes (checkpoints, whether each command is accepted as
     recorded, every task event) and stops at the first difference with its tick and a reason. The way
     metrics are measured never changes what is replayed.
+- Planning threads change how long a step takes and nothing else. `Simulation::usePlanningThreads(n)` lets the
+  independent path questions of a step (the way to the pickup of each newly assigned task, the ways to the free
+  chargers, the routes repaired after `placeObstacle`) be answered by `planning::PathBatchExecutor` on a
+  `core::ThreadPool`. Keep it so:
+  - Only pure questions go into a batch: a function of the layout and two cells and of nothing else. Anything
+    that depends on robots, reservations, tasks or on the answer to another question (the cooperative
+    searches, which are ordered by priority; `tryRepath`, which avoids the robots where they stand) is asked
+    on the stepping thread, in order.
+  - A worker never touches a `Simulation`. The executor reads a private copy of the layout (taken when
+    `Warehouse::version()` changes), has a planner of its own for each participant, and writes only the answer
+    slot of its question. `Simulation` applies the answers itself, on its own thread, in the order the questions
+    were asked: there is one path by which state changes. The work a batch did is counted with the planner's
+    (`batchWork_`, `plannerWork()`), so the checksum is the same for every thread count.
+  - A new batch needs a test that compares 0 and N threads tick by tick (`PlanningThreadsTest`), a mutation
+    check, and a line in `warehousesim_scaling_bench`, which fails if a thread count changes a state or a route.
+  - Threads are not part of the scenario: they are not recorded, and a recording made on any number of threads
+    replays on any other (`ReplayOptions::planningThreads`). Do not make a recording or a checksum depend on them.
+  - `core::ThreadPool` is bounded in threads and in queued tasks (`submit` blocks while the queue is full).
+    `shutdown()` and the destructor refuse new tasks, wake producers that are blocked, run everything already
+    accepted and join. A task must not call `parallelFor` or `shutdown` on its own pool (both throw), and
+    `parallelFor` rethrows the exception of the lowest index after all the other calls have run.
+    `ThreadPoolTest` and the mutants that hang (a producer never woken, a worker that abandons tasks) are what
+    pin this down; run them under TSan after any change to the pool.
+- Optimisations keep behaviour: the golden checksums of a run (`ThePinnedScenarioHasThePinnedChecksums`,
+  `PlanningThreadsTest`, and the one-thread-against-N comparisons) must not move. `Warehouse::version()` only
+  says whether a layout may have changed, so caches that key on it (`SpaceTimeAStar`, `PathBatchExecutor`)
+  stay correct; never decide anything from its value. A distance field is charged for as before whether it was
+  kept or not (`recent_`), because the planning limits were tuned that way: kept fields save time, not work.
+  If a speed-up must change what a run computes (for instance, counting fewer expansions), it is a change of
+  the engine: raise `kEngineRevision` and regenerate the fixtures, in the same change.
 - Everything the editor decides is in `editor` (the model) and `view::EditorController` (input to edits):
   both are tested without a display, with plain `InputEvents`. `rendering` only translates SDL events into
   `PointerAction`s and `EditorCommand`s, in the order they happened, and must not decide anything. Anything
@@ -243,8 +274,9 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   `std::optional` and `std::string_view` instead of pointer+length pairs.
 - Validate at boundaries (constructors, `fromRows`, JSON, CLI arguments) by throwing or returning
   `std::optional`; do not re-check invariants the types already guarantee.
-- Every thread is joined before its owner is destroyed (`SimulationRunner::~SimulationRunner`). Shared state is
-  guarded by one mutex; readers get value-copy `Snapshot`s.
+- Every thread is joined before its owner is destroyed (`SimulationRunner::~SimulationRunner`,
+  `ThreadPool::~ThreadPool`). Shared state is guarded by one mutex; readers get value-copy `Snapshot`s. Apart
+  from those two, no module starts a thread.
 - SDL init/quit, window and renderer lifetimes are owned by `SdlWindow` and unwind correctly if
   construction throws.
 - Code must compile warning-free with `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion`
@@ -269,6 +301,8 @@ build/default/apps/warehousesim_cli --ticks 200 --seed 1   # headless smoke test
 build/default/apps/warehousesim_cli --layout compact --ticks 200   # also: fulfilment
 SDL_VIDEODRIVER=dummy build/default/apps/warehousesim_gui --frames 30   # fleet interface smoke test, no window
 build/release/bench/warehousesim_fleet_bench                              # the baseline table of the README
+build/release/bench/warehousesim_scaling_bench                            # a step with and without planning threads (README)
+build/default/apps/warehousesim_cli --layout large --robots 100 --ticks 300 --threads 2   # 100 robots, 2 planning threads
 build/default/apps/warehousesim_cli --layout compact --ticks 500 --metrics --metrics-csv build/m   # dashboard + CSV
 build/default/apps/warehousesim_cli --layout compact --ticks 500 --seed 2 --record build/run.json   # record ...
 build/default/apps/warehousesim_cli --replay build/run.json                                         # ... and check the replay

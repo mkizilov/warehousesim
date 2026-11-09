@@ -24,6 +24,18 @@ target_include_directories(warehousesim_fleet_bench PRIVATE "${CMAKE_SOURCE_DIR}
 target_link_libraries(warehousesim_fleet_bench PRIVATE warehousesim::simulation)
 warehousesim_configure_target(warehousesim_fleet_bench)
 
+# Wall-clock cost of a step with and without planning threads on fleets of a hundred robots and
+# more. Its --quick run only checks that every thread count gives exactly the single-threaded
+# states and routes; the timings are for a Release build on a quiet machine (see the README).
+add_executable(warehousesim_scaling_bench scaling_bench.cpp)
+target_include_directories(warehousesim_scaling_bench PRIVATE "${CMAKE_SOURCE_DIR}/apps/common")
+target_link_libraries(warehousesim_scaling_bench PRIVATE warehousesim::simulation warehousesim::view)
+warehousesim_configure_target(warehousesim_scaling_bench)
+
+if(WAREHOUSESIM_BUILD_TESTS)
+  add_test(NAME scaling_bench_smoke COMMAND warehousesim_scaling_bench --quick)
+endif()
+
 if(WAREHOUSESIM_BUILD_TESTS)
   add_test(NAME fleet_bench_smoke
     COMMAND warehousesim_fleet_bench --quick

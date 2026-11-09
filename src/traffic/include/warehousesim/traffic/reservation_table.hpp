@@ -2,9 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -112,12 +112,21 @@ class ReservationTable {
   [[nodiscard]] std::optional<Conflict> earliestConflict(core::RobotId robot,
                                                          std::span<const Request> requests) const;
 
+  // check() reduced to a yes or no for the questions a search asks by the thousand, without making
+  // a Conflict to say what. isFree: `cell` is not a wall and no other robot holds it during `step`
+  // (the same as no conflict for Occupy{cell, [step, step + 1)}). isTraversable: `to` is not a wall
+  // and no other robot goes from `to` to `from` during `step` (the same as no conflict for
+  // Traverse{from, to, step}). `robot` must be valid and `from` and `to` adjacent.
+  [[nodiscard]] bool isFree(core::RobotId robot, core::Point cell, Step step) const noexcept;
+  [[nodiscard]] bool isTraversable(core::RobotId robot, core::Point from, core::Point to,
+                                   Step step) const noexcept;
+
   // check() and, if there is no conflict, reserve. Returns the conflict, or nothing on success.
   std::optional<Conflict> reserve(core::RobotId robot, const Request& request);
   // All of the requests, or none of them.
   std::optional<Conflict> reserveAll(core::RobotId robot, std::span<const Request> requests);
 
-  // Gives back everything the robot reserved.
+  // Gives back everything the robot reserved. Costs what the robot held, not the size of the table.
   void release(core::RobotId robot);
   // Forgets every reservation; the layout stays.
   void clear();
@@ -136,11 +145,17 @@ class ReservationTable {
     core::RobotId robot;
     StepRange steps;
   };
+  // A traversal is kept with the cell it starts from; `direction` says which neighbour it goes to.
   struct EdgeEntry {
     core::RobotId robot;
     Step step;
+    std::uint8_t direction;  // 0 north, 1 east, 2 south, 3 west
   };
-  using Edge = std::pair<core::Point, core::Point>;
+  // Where one robot has entries, so that giving them back does not have to look at the whole table.
+  struct Holdings {
+    std::vector<std::size_t> cells;      // cells with an occupancy entry of the robot
+    std::vector<std::size_t> edgeCells;  // cells with a traversal entry of the robot
+  };
 
   [[nodiscard]] std::optional<Conflict> checkOccupy(core::RobotId robot,
                                                     const Occupy& request) const;
@@ -150,12 +165,18 @@ class ReservationTable {
   [[nodiscard]] bool isWalkable(core::Point cell) const noexcept;
   // The indexes of the cells that hold entries, sorted and without repeats.
   [[nodiscard]] std::vector<std::size_t> touchedCells() const;
+  [[nodiscard]] Holdings& holdingsOf(core::RobotId robot);
 
   world::GridSize size_;
   std::vector<bool> walkable_;
-  std::vector<std::vector<Entry>> cells_;  // by cell index
-  std::vector<std::size_t> touched_;       // cell indexes that may hold entries
-  std::map<Edge, std::vector<EdgeEntry>> edges_;
+  std::vector<std::vector<Entry>> cells_;      // by cell index
+  std::vector<std::vector<EdgeEntry>> edges_;  // by the cell the traversal starts from
+  std::vector<std::size_t> touched_;           // cells that hold entries, no repeats
+  std::vector<std::size_t> touchedEdgeCells_;  // cells that hold traversal entries, no repeats
+  std::vector<char> isTouched_;                // by cell index: listed in touched_
+  std::vector<char> hasEdges_;                 // by cell index: listed in touchedEdgeCells_
+  std::unordered_map<std::uint32_t, Holdings> holdings_;  // by robot id
+  std::size_t traversals_ = 0;
 };
 
 }  // namespace warehousesim::traffic

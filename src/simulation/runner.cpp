@@ -128,6 +128,17 @@ std::optional<Recording> SimulationRunner::recording() const {
   return journal_->recording(simulation_);
 }
 
+void SimulationRunner::usePlanningThreads(std::size_t workers) {
+  const std::scoped_lock lock(mutex_);
+  simulation_.usePlanningThreads(workers);
+  planningWorkers_ = workers;
+}
+
+std::optional<planning::PathBatchExecutor::Stats> SimulationRunner::planningBatchStats() const {
+  const std::scoped_lock lock(mutex_);
+  return simulation_.batchStats();
+}
+
 metrics::FleetMetrics SimulationRunner::metrics() const {
   const std::scoped_lock lock(mutex_);
   return collector_.report();
@@ -167,6 +178,9 @@ CommandOutcome SimulationRunner::restart(const ResetScenario& command) {
       return {false, "the scenario would build another layout; not restarted", std::nullopt};
     }
     simulation_ = std::move(fresh);
+    if (simulation_.usesDefaultComponents()) {
+      simulation_.usePlanningThreads(planningWorkers_);  // an optimisation, not a reason to refuse
+    }
     collector_ = MetricsCollector(simulation_, metricsOptions_);
   } catch (const std::exception& error) {
     return {false, std::string("could not restart: ") + error.what(), std::nullopt};
@@ -263,9 +277,13 @@ void SimulationRunner::loop() {
     lastAdvance_ = now;
     std::uint32_t due = stepper_.advance(elapsed.count());
     bool stepped = false;
-    Snapshot beforeLastStep;
+    // latest_ is always the state as it is now, so it is the state before the last step, unless
+    // there are several steps to take: then the one before the last is taken on the way.
+    Snapshot beforeLastStep = std::move(latest_);
     while (due > 0 && shouldStep()) {
-      beforeLastStep = simulation_.snapshot();
+      if (stepped) {
+        beforeLastStep = simulation_.snapshot();
+      }
       simulation_.step();
       collector_.observe(simulation_);
       if (journal_) {
@@ -278,6 +296,8 @@ void SimulationRunner::loop() {
       previous_ = std::move(beforeLastStep);
       latest_ = simulation_.snapshot();
       published_.notify_all();
+    } else {
+      latest_ = std::move(beforeLastStep);
     }
   }
 }

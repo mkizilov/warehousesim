@@ -90,6 +90,51 @@ TEST(PathDistanceTest, TheCacheIsBoundedAndStaysCorrectWhenItFillsUp) {
   }
 }
 
+TEST(PathDistanceTest, StaysRightWhenMoreGoalsAreAskedAboutThanItKeepsDistancesFor) {
+  Rng rng(31);
+  const Warehouse w = warehousesim::testing::makeRandomObstacleMap(14, 14, 200, rng);
+  PathDistance estimator;
+  std::vector<Point> cells;
+  for (int y = 0; y < 14; ++y) {
+    for (int x = 0; x < 14; ++x) {
+      cells.push_back(P(x, y));
+    }
+  }
+  // Far more than 32 goals, each asked about again and again from other starts.
+  for (int round = 0; round < 3; ++round) {
+    for (std::size_t g = 0; g < cells.size(); ++g) {
+      const Point goal = cells[(g * 7 + static_cast<std::size_t>(round)) % cells.size()];
+      const Point from = cells[rng.below(cells.size())];
+      ASSERT_EQ(estimator.distance(w, from, goal),
+                warehousesim::testing::shortestDistance(w, from, goal, {}, DirectionSet::all()))
+          << from.x << "," << from.y << " to " << goal.x << "," << goal.y;
+    }
+  }
+}
+
+TEST(PathDistanceTest, AnEditedLayoutGivesNewAnswersOnceTheEstimatorIsToldToForget) {
+  Warehouse w = layout({"....."});
+  PathDistance estimator;
+  EXPECT_EQ(estimator.distance(w, P(0, 0), P(4, 0)), 4);
+  w.set(P(2, 0), warehousesim::world::CellType::Wall);
+  estimator.reset();
+  EXPECT_FALSE(estimator.distance(w, P(0, 0), P(4, 0)).has_value());
+  EXPECT_EQ(estimator.distance(w, P(0, 0), P(1, 0)), 1);
+  w.set(P(2, 0), warehousesim::world::CellType::Free);
+  estimator.reset();
+  EXPECT_EQ(estimator.distance(w, P(0, 0), P(4, 0)), 4);
+}
+
+TEST(PathDistanceTest, AnAnswerIsRememberedOnceWhateverTheDirectionOfTheQuestion) {
+  const Warehouse w = layout({"...", "..."});
+  PathDistance estimator;
+  (void)estimator.distance(w, P(0, 0), P(2, 1));
+  (void)estimator.distance(w, P(2, 1), P(0, 0));
+  EXPECT_EQ(estimator.cacheSize(), 2U) << "(from, to) and (to, from) are two questions";
+  (void)estimator.distance(w, P(0, 0), P(2, 1));
+  EXPECT_EQ(estimator.cacheSize(), 2U);
+}
+
 TEST(PathDistanceTest, MatchesBreadthFirstSearchOnRandomMaps) {
   Rng rng(1010);
   PathDistance estimator;

@@ -214,6 +214,27 @@ TEST(RunnerFrameTest, PausingHoldsThePictureStillAndResumingCarriesOnFromThere) 
   EXPECT_GE(alpha, held + 0.05);
 }
 
+// At the top speed a wake-up owes the worker a dozen steps at a time. Whatever it takes in one go,
+// the picture must be of the step before the last and the last, never of the step before the first.
+TEST(RunnerFrameTest, PreviousIsOneStepBehindLatestEvenWhenSeveralStepsAreTakenAtOnce) {
+  SimulationRunner runner(makeLayoutSimulation("compact", 6).value(), milliseconds(1));
+  runner.setSpeed(warehousesim::core::FixedTimestep::kMaxSpeed);
+  runner.start(1500);
+  std::uint64_t lastTick = 0;
+  int bursts = 0;
+  const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+  while (lastTick < 1500 && std::chrono::steady_clock::now() < deadline) {
+    const auto frame = runner.frame();
+    if (frame.latest.tick > 0) {
+      ASSERT_EQ(frame.latest.tick, frame.previous.tick + 1) << "at tick " << frame.latest.tick;
+    }
+    bursts += frame.latest.tick > lastTick + 1 ? 1 : 0;
+    lastTick = frame.latest.tick;
+  }
+  ASSERT_EQ(lastTick, 1500U);
+  EXPECT_GT(bursts, 0) << "the run really did take several steps at once";
+}
+
 // However often the renderer asks for frames, the simulation computes the same thing.
 TEST(RunnerFrameTest, HowOftenTheRendererPollsDoesNotChangeWhatIsSimulated) {
   auto reference = makeLayoutSimulation("compact", 5).value();

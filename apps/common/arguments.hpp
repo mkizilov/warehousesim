@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 #include "warehousesim/world/layouts.hpp"
 
@@ -44,6 +45,35 @@ inline bool readUnsignedOption(int argc, char** argv, int& index, std::string_vi
   out = *parsed;
   ++index;
   return true;
+}
+
+// The same, for an option that may be left out: sets `out` only if the option is given.
+inline bool readOptionalUnsignedOption(int argc, char** argv, int& index, std::string_view name,
+                                       std::optional<std::uint64_t>& out, bool& failed) {
+  std::uint64_t value = 0;
+  if (!readUnsignedOption(argc, argv, index, name, value, failed)) {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+// Whole numbers separated by commas ("0,1,2"); nullopt if any item is empty or not a number.
+[[nodiscard]] inline std::optional<std::vector<std::uint64_t>> parseUnsignedList(
+    std::string_view text) {
+  std::vector<std::uint64_t> numbers;
+  while (true) {
+    const std::size_t comma = text.find(',');
+    const auto value = parseUnsigned(text.substr(0, comma));
+    if (!value) {
+      return std::nullopt;
+    }
+    numbers.push_back(*value);
+    if (comma == std::string_view::npos) {
+      return numbers;
+    }
+    text.remove_prefix(comma + 1);
+  }
 }
 
 // Parses a finite decimal number; the whole text must be consumed. (std::from_chars for

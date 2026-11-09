@@ -4,12 +4,13 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "warehousesim/core/clock.hpp"
 #include "warehousesim/core/ids.hpp"
 #include "warehousesim/core/point.hpp"
+#include "warehousesim/robots/forecast.hpp"
 #include "warehousesim/robots/robot.hpp"
 #include "warehousesim/traffic/reservation_table.hpp"
 #include "warehousesim/world/warehouse.hpp"
@@ -117,18 +118,38 @@ class TrafficController {
   // Reserves the robot's forecast route set off by the smallest delay (up to six steps) at which it
   // fits; returns the delay, or 0 and reserves nothing if there is none.
   [[nodiscard]] std::size_t reserveDelayed(const robots::Robot& robot);
+  // What the robot holds now (its cell and the cells granted ahead) as requests for this step. The
+  // reference is to storage that the next call overwrites.
+  [[nodiscard]] const std::vector<Request>& currentHoldsRequests(const robots::Robot& robot);
+  [[nodiscard]] robots::Robot& walker(const robots::Robot& robot,
+                                      std::optional<std::size_t> cutTo = std::nullopt);
+  // Counts a cell on the route of the robot just planned (by > 0) or takes the count back.
+  void countRoute(core::Point cell, int by);
+  [[nodiscard]] bool onSomeRoute(core::Point cell) const;
 
   ReservationTable table_;
-  // Every cell on the remaining route of each robot planned so far this step, however far ahead.
-  std::unordered_map<core::Point, std::uint32_t, core::PointHash>
-      routes_;                          // cell -> routes through it
-  std::vector<core::Point> lastRoute_;  // what the robot planned last added to routes_
+  // Every cell on the remaining route of each robot planned so far this step, however far ahead:
+  // how many routes pass through each cell (by cell index), and which cells have a count.
+  std::vector<std::uint32_t> routeCount_;
+  std::vector<std::size_t> routeCells_;
+  std::vector<core::Point> lastRoute_;  // what the robot planned last added to the counts
   std::size_t horizon_;
   core::Tick now_ = 0;
   bool began_ = false;
   std::optional<core::RobotId> lastPlanned_;
   std::vector<std::uint32_t> rank_;  // by robot id: 1 plans first
   TrafficStats stats_;
+
+  // Working storage, kept between calls so that planning does not allocate once it has grown.
+  std::optional<robots::Robot> walkerSlot_;
+  robots::ForecastBuffer forecast_;
+  std::vector<core::Point> holds_;
+  std::vector<core::Point> route_;
+  std::vector<Request> factRequests_;
+  std::vector<Request> wholeRequests_;
+  std::vector<Request> cutRequests_;
+  std::vector<Request> delayRequests_;
+  std::vector<std::pair<core::Point, std::size_t>> latest_;
 };
 
 }  // namespace warehousesim::traffic

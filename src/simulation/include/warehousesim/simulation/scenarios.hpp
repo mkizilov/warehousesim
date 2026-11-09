@@ -12,7 +12,7 @@
 namespace warehousesim::simulation {
 
 // The most robots a scenario will start, however much room the layout has.
-inline constexpr std::size_t kMaxScenarioRobots = 64;
+inline constexpr std::size_t kMaxScenarioRobots = 512;
 
 // What can be changed about a scenario without changing its layout or its robot model.
 struct ScenarioOptions {

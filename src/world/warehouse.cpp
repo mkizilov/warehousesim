@@ -1,5 +1,6 @@
 #include "warehousesim/world/warehouse.hpp"
 
+#include <atomic>
 #include <limits>
 #include <stdexcept>
 
@@ -7,7 +8,17 @@ namespace warehousesim::world {
 
 using core::Point;
 
-Warehouse::Warehouse(GridSize size) : size_(size), cells_(size.cellCount(), CellType::Free) {}
+namespace {
+
+std::uint64_t freshVersion() noexcept {
+  static std::atomic<std::uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
+}  // namespace
+
+Warehouse::Warehouse(GridSize size)
+    : size_(size), cells_(size.cellCount(), CellType::Free), version_(freshVersion()) {}
 
 Warehouse::Warehouse(std::int32_t width, std::int32_t height)
     : Warehouse(GridSize(width, height)) {}
@@ -57,6 +68,7 @@ void Warehouse::set(Point p, CellType type) {
     throw std::out_of_range("point outside warehouse");
   }
   cells_[size_.indexOf(p)] = type;
+  version_ = freshVersion();
 }
 
 std::vector<Point> Warehouse::neighbors(Point p) const {

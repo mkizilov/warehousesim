@@ -25,6 +25,10 @@ struct LayoutInfo {
 // "fulfilment": 28x16 walled hall with six shelf rows, a pickup column, a dropoff row and
 //               a row of chargers.
 [[nodiscard]] Warehouse makeFulfilmentWarehouse();
+// "large": 100x64 walled hall for large fleets: 147 chargers along the top, twelve bands of shelves
+//          in blocks of six with two-cell aisles, 25 dropoffs near the bottom. No pickups; goods
+//          are collected from the aisles beside the shelves.
+[[nodiscard]] Warehouse makeLargeWarehouse();
 
 [[nodiscard]] std::span<const LayoutInfo> predefinedLayouts();
 // nullopt when no layout has that name.

@@ -63,6 +63,18 @@ jobs:
       - name: Fleet benchmark (simulated figures; fails on a collision or an unaccounted task)
         if: matrix.preset == 'release'
         run: build/release/bench/warehousesim_fleet_bench
+      - name: Scaling benchmark (wall-clock figures; fails if a thread count changes any result)
+        if: matrix.preset == 'release'
+        run: build/release/bench/warehousesim_scaling_bench --robots 100 --ticks 400 --samples 1
+      - name: Large hall, 100 robots, planning on 2 threads (the same run on one thread, and its replay, must match)
+        run: |
+          cli=build/${{ matrix.preset }}/apps/warehousesim_cli
+          $cli --layout large --robots 100 --spawn 1 --ticks 300 --seed 3 --threads 2 \
+            --record build/ci-large.rec.json > build/ci-large.threaded.json
+          $cli --layout large --robots 100 --spawn 1 --ticks 300 --seed 3 > build/ci-large.single.json
+          $cli --replay build/ci-large.rec.json > build/ci-large.replay.json
+          cmp build/ci-large.threaded.json build/ci-large.single.json
+          cmp build/ci-large.threaded.json build/ci-large.replay.json
       - name: Record and replay every predefined layout (the replay must match, byte for byte)
         run: |
           for layout in demo compact fulfilment; do

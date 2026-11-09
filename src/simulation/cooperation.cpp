@@ -2,6 +2,7 @@
 // watch for robots that cannot get anywhere, getting out of deadlocks, and repairing routes when
 // the layout changes.
 #include <algorithm>
+#include <functional>
 #include <stdexcept>
 #include <utility>
 
@@ -21,7 +22,7 @@ using robots::RobotState;
 // first: the longest-waiting few get a share of their own (one search's worth each), and everybody
 // else draws on what is left, in the order they take their turn.
 void Simulation::beginPlanning() {
-  plannerBase_ = planner_->work();
+  plannerBase_ = plannerWork();
   stepWork_ = 0;
   std::fill(reservedShare_.begin(), reservedShare_.end(), false);
 
@@ -68,11 +69,16 @@ traffic::TrafficPlan Simulation::cooperate(Robot& robot, const traffic::TrafficP
     return plan;
   }
 
-  const planning::BlockedSet avoid = stationaryCells(robot.id());
+  // The cells to steer clear of are only needed by a plan that falls short of the destination, so
+  // they are made on demand.
+  const planning::BlockedSet none;
+  const std::function<planning::BlockedSet()> avoidLater = [this, &robot] {
+    return stationaryCells(robot.id());
+  };
   const traffic::CooperativeRouterOptions options{traffic_.horizon(), limit, config_.maxDetourCells,
                                                   config_.maxDodgeCells};
-  const traffic::RouteOutcome outcome =
-      router_.reroute({world_.layout(), traffic_.table(), robot, now, *planner_, avoid, options});
+  const traffic::RouteOutcome outcome = router_.reroute(
+      {world_.layout(), traffic_.table(), robot, now, *planner_, none, options, &avoidLater});
 
   ++planningStats_.searches;
   planningStats_.work += outcome.work;
@@ -139,7 +145,7 @@ void Simulation::recordProgress(const Robot& robot, const traffic::TrafficPlan& 
 // robots that wait for each other out of the way, and let robots that are hopelessly stuck give up.
 void Simulation::supervise() {
   planningStats_.peakStepWork =
-      std::max(planningStats_.peakStepWork, stepWork_ + (planner_->work() - plannerBase_));
+      std::max(planningStats_.peakStepWork, stepWork_ + (plannerWork() - plannerBase_));
 
   for (const Robot& robot : robots_) {
     if (progress_.stuckTicks(robot.id()) == config_.prolongedBlockTicks) {
@@ -240,24 +246,39 @@ void Simulation::rebuildTraffic() {
 // Every robot whose remaining route now runs through an obstacle gets a new one from the cell it
 // has been granted up to. Without a way to its destination its task goes back to the queue (it had
 // not collected it) or fails (it had), and the robot stands down.
+//
+// The new routes are independent questions about the new layout (none depends on what happened to
+// another robot), so they are all asked at once, on the planning threads if there are any, and then
+// applied in robot order.
 void Simulation::repairRoutes() {
+  std::vector<Robot*> broken;
+  queries_.clear();
   for (Robot& robot : robots_) {
     if (robot.state() != RobotState::Navigating || !robot.hasPath()) {
       continue;
     }
-    const bool broken = std::any_of(robot.path().begin(), robot.path().end(),
-                                    [this](Point cell) { return !world_.isWalkable(cell); });
-    if (!broken) {
+    const bool cut = std::any_of(robot.path().begin(), robot.path().end(),
+                                 [this](Point cell) { return !world_.isWalkable(cell); });
+    if (!cut) {
       continue;
     }
     ++planningStats_.obstacleRepairs;
     const std::size_t held = robot.authority();
-    const Point from = held == 0 ? robot.position() : robot.path()[held - 1];
-    auto rest = planner_->findPath(world_.layout(), from, *robot.destination(), {});
-    if (rest) {
+    broken.push_back(&robot);
+    queries_.push_back(
+        {held == 0 ? robot.position() : robot.path()[held - 1], *robot.destination()});
+  }
+  if (broken.empty()) {
+    return;
+  }
+  planRoutes(queries_);
+  for (std::size_t i = 0; i < broken.size(); ++i) {
+    Robot& robot = *broken[i];
+    if (answers_[i].found()) {
+      const std::size_t held = robot.authority();
       robots::RobotPath path(robot.path().begin(),
                              robot.path().begin() + static_cast<std::ptrdiff_t>(held));
-      path.insert(path.end(), rest->begin(), rest->end());
+      path.insert(path.end(), answers_[i].path.begin(), answers_[i].path.end());
       robot.setPath(std::move(path));
       nextSearch_[robot.id().value - 1] = clock_.tick();
     } else if (robot.goal() == NavigationGoal::Pickup && robot.task()) {

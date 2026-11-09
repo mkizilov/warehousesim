@@ -14,12 +14,22 @@
 namespace warehousesim::apps {
 
 // Where the simulated warehouse comes from: a predefined layout by name, or a map file made with
-// the editor. At most one of the two may be given; neither means the "demo" layout.
+// the editor. At most one of the two may be given; neither means the "demo" layout. `robots` and
+// `spawn` choose the size of the fleet and the ticks between random tasks (see ScenarioOptions);
+// unset, the scenario is the usual one.
 struct WarehouseSource {
   std::string layout;
   std::string mapFile;
+  std::optional<std::uint64_t> robots;
+  std::optional<std::uint64_t> spawn;
 
   [[nodiscard]] bool conflicting() const noexcept { return !layout.empty() && !mapFile.empty(); }
+  [[nodiscard]] simulation::ScenarioOptions options() const {
+    simulation::ScenarioOptions result;
+    result.robots = robots;
+    result.taskSpawnInterval = spawn;
+    return result;
+  }
 };
 
 struct ScenarioResult {
@@ -31,21 +41,23 @@ struct ScenarioResult {
 // file that is missing, invalid or unable to host a simulation is reported on `err` (with every
 // problem found in it) and gives an empty result.
 [[nodiscard]] inline ScenarioResult makeScenario(const WarehouseSource& source, std::ostream& err) {
-  if (source.mapFile.empty()) {
-    auto scenario = simulation::layoutScenario(
-        source.layout.empty() ? std::string_view("demo") : std::string_view(source.layout));
-    const bool unknown = !scenario.has_value();
-    return {std::move(scenario), unknown};
-  }
-  const mapio::MapLoad load = mapio::loadMapFile(source.mapFile);
-  if (!load.ok()) {
-    err << "error: " << source.mapFile << " is not a valid map:\n" << load.describe() << '\n';
-    return {};
-  }
   try {
-    return {simulation::mapScenario(load.document->layout), false};
+    if (source.mapFile.empty()) {
+      auto scenario = simulation::layoutScenario(
+          source.layout.empty() ? std::string_view("demo") : std::string_view(source.layout),
+          source.options());
+      const bool unknown = !scenario.has_value();
+      return {std::move(scenario), unknown};
+    }
+    const mapio::MapLoad load = mapio::loadMapFile(source.mapFile);
+    if (!load.ok()) {
+      err << "error: " << source.mapFile << " is not a valid map:\n" << load.describe() << '\n';
+      return {};
+    }
+    return {simulation::mapScenario(load.document->layout, source.options()), false};
   } catch (const std::invalid_argument& error) {
-    err << "error: " << source.mapFile << ": " << error.what() << '\n';
+    err << "error: " << (source.mapFile.empty() ? source.layout : source.mapFile) << ": "
+        << error.what() << '\n';
     return {};
   }
 }

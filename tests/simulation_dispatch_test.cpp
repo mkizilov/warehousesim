@@ -368,6 +368,41 @@ TEST(SimulationDispatchTest, AFaultyDispatcherCannotGiveOneTaskToTwoRobotsOrTwoT
   EXPECT_EQ(sim.tasks().find(first)->status, TaskStatus::Completed);
 }
 
+// A task whose pickup a robot cannot reach is failed on its own; the other assignment of the same
+// plan, before it or after it, goes ahead.
+TEST(SimulationDispatchTest, AnAssignmentWhosePickupCannotBeReachedFailsOnlyThatTask) {
+  // A wall at x = 3 splits the hall: robot 1 starts left of it, robot 2 right of it. Both tasks of
+  // a plan fetch from the same side, so whichever robot is on the other side is given a task it
+  // cannot start.
+  const Warehouse hall = layout({"...#..."});
+  struct Variant {
+    Point pickup;
+    Point dropoff;
+    std::size_t robotThatCannotReach;
+  };
+  for (const Variant& v : {Variant{P(2, 0), P(1, 0), 1}, Variant{P(5, 0), P(6, 0), 0}}) {
+    DispatchPlan plan;
+    plan.assignments = {Assignment{R(1), T(1), 0}, Assignment{R(2), T(2), 0}};
+    Simulation sim(hall, {P(0, 0), P(6, 0)}, {}, nullptr,
+                   std::make_unique<FixedPlanDispatcher>(plan));
+    ASSERT_EQ(sim.submitTask(v.pickup, v.dropoff), T(1));
+    ASSERT_EQ(sim.submitTask(v.pickup, v.dropoff), T(2));
+    const std::size_t good = 1 - v.robotThatCannotReach;
+    const TaskId goodTask = T(static_cast<std::uint32_t>(good + 1));
+    const TaskId badTask = T(static_cast<std::uint32_t>(v.robotThatCannotReach + 1));
+
+    sim.step();
+    EXPECT_EQ(sim.tasks().find(badTask)->status, TaskStatus::Failed)
+        << "robot " << v.robotThatCannotReach + 1 << " cannot get there";
+    EXPECT_FALSE(sim.robots()[v.robotThatCannotReach].task().has_value());
+    EXPECT_EQ(sim.robots()[v.robotThatCannotReach].state(), RobotState::Idle);
+    EXPECT_EQ(sim.tasks().find(goodTask)->status, TaskStatus::Assigned);
+    EXPECT_TRUE(sim.robots()[good].task() == goodTask);
+    EXPECT_EQ(sim.robots()[good].state(), RobotState::Navigating);
+    expectExclusiveClaims(sim);
+  }
+}
+
 TEST(SimulationDispatchTest, AFaultyDispatcherCannotUseAnUnavailableRobotOrACancelledTask) {
   DispatchPlan plan;
   plan.assignments = {Assignment{R(1), T(1), 0}, Assignment{R(2), T(2), 0}};

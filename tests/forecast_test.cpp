@@ -180,6 +180,97 @@ TEST(ForecastTest, ARouteIsNeverCutBelowTheCellsTheRobotAlreadyHolds) {
   }
 }
 
+// ---- the same forecast in reusable storage ------------------------------------------------------
+
+Holds holdsOf(const warehousesim::robots::ForecastBuffer& buffer, std::size_t step) {
+  const auto span = buffer.holdsAt(step);
+  return Holds(span.begin(), span.end());
+}
+
+TEST(ForecastBufferTest, HoldsExactlyTheForecastThatForecastHoldsGivesForEveryKindOfRobotAndRoute) {
+  for (const RobotSpec& spec : {ideal(), vehicle()}) {
+    for (const int cells : {1, 2, 5, 12}) {
+      for (const std::size_t steps : {0U, 1U, 6U, 16U}) {
+        Robot robot(R(1), P(0, 0), spec, Direction::East);
+        robot.beginTask(T(1), P(cells, 0), eastward(P(0, 0), cells));
+        (void)stepUnobstructed(robot);  // already under way
+        const auto want = forecastHolds(robot, steps);
+
+        Robot walker = robot;
+        warehousesim::robots::ForecastBuffer buffer;
+        forecastHolds(walker, steps, buffer);
+        ASSERT_EQ(buffer.steps(), steps);
+        for (std::size_t s = 0; s < steps; ++s) {
+          ASSERT_EQ(holdsOf(buffer, s), want[s]) << cells << " cells, step " << s;
+        }
+        EXPECT_EQ(buffer.toVectors(), want);
+      }
+    }
+  }
+}
+
+TEST(ForecastBufferTest, ReusingTheBufferAndTheWalkerForAnotherRobotLeavesNothingOfTheFirst) {
+  Robot longRoute(R(1), P(0, 0), vehicle(), Direction::East);
+  longRoute.beginTask(T(1), P(12, 0), eastward(P(0, 0), 12));
+  Robot shortRoute(R(2), P(4, 3), ideal(), Direction::East);
+  shortRoute.beginTask(T(2), P(6, 3), eastward(P(4, 3), 2));
+  const Robot idle(R(3), P(7, 7));
+
+  Robot walker = longRoute;
+  warehousesim::robots::ForecastBuffer buffer;
+  forecastHolds(walker, 14, buffer);
+  EXPECT_EQ(buffer.toVectors(), forecastHolds(longRoute, 14));
+
+  walker = shortRoute;
+  forecastHolds(walker, 5, buffer);
+  EXPECT_EQ(buffer.steps(), 5U);
+  EXPECT_EQ(buffer.toVectors(), forecastHolds(shortRoute, 5));
+
+  walker = idle;
+  forecastHolds(walker, 3, buffer);
+  EXPECT_EQ(buffer.toVectors(), forecastHolds(idle, 3));
+
+  forecastHolds(walker, 0, buffer);
+  EXPECT_EQ(buffer.steps(), 0U);
+  buffer.clear();
+  EXPECT_EQ(buffer.steps(), 0U);
+}
+
+TEST(ForecastBufferTest, ForecastingAWalkerNeverTouchesTheRobotItWasCopiedFrom) {
+  Robot robot(R(1), P(0, 0), vehicle(), Direction::East);
+  robot.beginTask(T(1), P(10, 0), eastward(P(0, 0), 10));
+  (void)stepUnobstructed(robot);
+  const Motion before = motionOf(robot);
+  Robot walker = robot;
+  warehousesim::robots::ForecastBuffer buffer;
+  forecastHolds(walker, 30, buffer);
+  EXPECT_TRUE(motionOf(robot) == before);
+}
+
+TEST(ForecastBufferTest, AssignRouteCutOfMakesAReusedRobotWhatWithRouteCutToMakesOfTheOriginal) {
+  Robot robot(R(1), P(0, 0), vehicle(), Direction::East);
+  robot.beginTask(T(1), P(10, 0), eastward(P(0, 0), 10));
+  (void)stepUnobstructed(robot);
+  (void)stepUnobstructed(robot);
+  const std::size_t routeLength = robot.path().size();
+
+  Robot reused(R(9), P(5, 5));  // not even the same robot to begin with
+  for (const std::size_t cut : {0U, 1U, 3U, 7U, 50U}) {
+    reused.assignRouteCutOf(robot, cut);
+    const Robot want = robot.withRouteCutTo(cut);
+    EXPECT_EQ(reused.id(), want.id());
+    EXPECT_EQ(reused.position(), want.position());
+    EXPECT_EQ(reused.destination(), want.destination());
+    EXPECT_EQ(reused.authority(), want.authority());
+    EXPECT_TRUE(motionOf(reused) == motionOf(want));
+    EXPECT_EQ((std::vector<Point>(reused.path().begin(), reused.path().end())),
+              (std::vector<Point>(want.path().begin(), want.path().end())));
+    EXPECT_EQ(forecastHolds(reused, 12), forecastHolds(want, 12));
+    EXPECT_EQ(reused.inconsistency().value_or("consistent"), "consistent");
+  }
+  EXPECT_EQ(robot.path().size(), routeLength) << "the original was never touched";
+}
+
 TEST(ForecastTest, ARobotThatWasWithdrawnForecastsItsOwnStopWithoutAskingForMore) {
   Robot robot(R(1), P(0, 0), vehicle(), Direction::East);
   robot.beginTask(T(1), P(10, 0), eastward(P(0, 0), 10));

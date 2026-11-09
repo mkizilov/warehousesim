@@ -46,13 +46,33 @@ robots::RobotSpec energySpec() {
   return spec;
 }
 
+// The biggest hall whose planning limits are made to fit it. Beyond it they stay as they are, which
+// keeps what one step may cost bounded.
+constexpr std::size_t kMaxScaledCells = 40'000;
+
+// A search in space and time starts from the distances to its goal over the whole hall, one sweep
+// that costs a cell of work for each cell (see SpaceTimeAStar::prepare). The usual limits are made
+// for halls of a few hundred cells; on a hall with more cells than the limit for one search, no
+// search could ever begin and robots would never look for a way round each other. Such a hall gets
+// limits that cover a sweep and an ordinary search, and the same share of a step for each.
+void fitPlanningLimits(SimulationConfig& config, std::size_t cells) {
+  if (cells <= config.planningWorkPerSearch || cells > kMaxScaledCells) {
+    return;
+  }
+  const std::size_t perSearch = config.planningWorkPerSearch + cells;
+  config.planningWorkPerStep =
+      config.planningWorkPerStep * perSearch / config.planningWorkPerSearch;
+  config.planningWorkPerSearch = perSearch;
+}
+
 SimulationConfig scenarioConfig(std::uint64_t seed, const robots::RobotSpec& robot,
-                                core::Tick taskSpawnInterval) {
+                                core::Tick taskSpawnInterval, std::size_t cells) {
   SimulationConfig config;
   config.seed = seed;
   config.taskSpawnInterval = taskSpawnInterval;
   config.varyTaskPriority = true;
   config.robot = robot;
+  fitPlanningLimits(config, cells);
   return config;
 }
 
@@ -136,9 +156,10 @@ Simulation makeMapSimulation(world::Warehouse warehouse, std::uint64_t seed,
   // Without charging stations robots have no battery model (they could never recharge).
   const bool chargers = !warehouse.cellsOfType(world::CellType::Charging).empty();
   const std::vector<core::Point> starts = startCells(warehouse, options.robots);
+  const std::size_t cells = warehouse.size().cellCount();
   return Simulation(std::move(warehouse), starts,
                     scenarioConfig(seed, chargers ? energySpec() : handlingSpec(),
-                                   options.taskSpawnInterval.value_or(kTaskSpawnInterval)));
+                                   options.taskSpawnInterval.value_or(kTaskSpawnInterval), cells));
 }
 
 ScenarioFactory mapScenario(world::Warehouse warehouse) {

@@ -42,6 +42,7 @@ class Replay {
     std::optional<Simulation> built;
     try {
       built.emplace(recording_.scenario);
+      built->usePlanningThreads(options_.planningThreads);
     } catch (const std::exception& error) {
       diverge(0, std::string("the scenario cannot be built: ") + error.what());
       return std::move(result_);
@@ -55,6 +56,7 @@ class Replay {
     result_.ticks = simulation_->tick();
     result_.snapshot = simulation_->snapshot();
     result_.checksum = simulation_->stateChecksum();
+    result_.planningBatches = simulation_->batchStats();
     if (collector_) {
       result_.metrics = collector_->report();
     }

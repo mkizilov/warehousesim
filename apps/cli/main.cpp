@@ -32,14 +32,22 @@ namespace sim = warehousesim::simulation;
 
 void printUsage(std::ostream& out) {
   out << "usage: warehousesim_cli [--ticks N] [--seed N] [--layout NAME | --map FILE]\n"
+         "                        [--robots N] [--spawn N] [--threads N]\n"
          "                        [--metrics] [--metrics-csv BASE]\n"
          "                        [--record FILE [--checkpoint-interval N]]\n"
-         "       warehousesim_cli --replay FILE [--ticks N] [--no-verify]\n"
+         "       warehousesim_cli --replay FILE [--ticks N] [--no-verify] [--threads N]\n"
          "                        [--metrics] [--metrics-csv BASE]\n"
          "  layouts: "
       << warehousesim::apps::layoutNames()
       << " (default: demo)\n"
          "  --map FILE   run a map made with warehousesim_editor instead of a layout\n"
+         "  --robots N   start N robots instead of the layout's usual fleet (1 to "
+      << sim::kMaxScenarioRobots
+      << ")\n"
+         "  --spawn N    a new random task every N ticks (default 5; 0: none)\n"
+         "  --threads N  plan routes on N worker threads besides the main one (default 0). The run "
+         "is\n"
+         "               the same for every N; only the time it takes changes\n"
          "  --metrics    also print the (simulated) performance dashboard to stderr\n"
          "  --metrics-csv BASE  write BASE.runs.csv, BASE.robots.csv and BASE.series.csv\n"
          "  --record FILE  also write a recording of the run: what it was built from, a checksum "
@@ -82,7 +90,7 @@ bool report(const Metrics& metrics, const warehousesim::metrics::FleetMetrics& f
 }
 
 int replayRecording(const std::string& file, std::optional<std::uint64_t> until, bool verify,
-                    const Metrics& metrics) {
+                    std::uint64_t threads, const Metrics& metrics) {
   const sim::RecordingLoad load = sim::loadRecordingFile(file);
   if (!load.ok()) {
     std::cerr << "error: " << file << " is not a usable recording:\n  " << load.problem->text()
@@ -92,6 +100,7 @@ int replayRecording(const std::string& file, std::optional<std::uint64_t> until,
   sim::ReplayOptions options;
   options.verify = verify;
   options.until = until;
+  options.planningThreads = static_cast<std::size_t>(threads);
   const sim::ReplayResult result = sim::replay(*load.recording, options);
   if (!result.ok()) {
     std::cerr << "error: the replay of " << file << " differs from the recording at tick "
@@ -179,6 +188,7 @@ int main(int argc, char** argv) {
   bool seedGiven = false;
   bool intervalGiven = false;
   bool noVerify = false;
+  std::uint64_t threads = 0;
   warehousesim::apps::WarehouseSource source;
   Metrics metrics;
   std::string recordFile;
@@ -201,7 +211,12 @@ int main(int argc, char** argv) {
     } else if (argument == "--checkpoint-interval") {
       intervalGiven = true;
     }
-    if (warehousesim::apps::readStringOption(argc, argv, i, "--metrics-csv", metrics.csvBase,
+    if (warehousesim::apps::readUnsignedOption(argc, argv, i, "--threads", threads, failed) ||
+        warehousesim::apps::readOptionalUnsignedOption(argc, argv, i, "--robots", source.robots,
+                                                       failed) ||
+        warehousesim::apps::readOptionalUnsignedOption(argc, argv, i, "--spawn", source.spawn,
+                                                       failed) ||
+        warehousesim::apps::readStringOption(argc, argv, i, "--metrics-csv", metrics.csvBase,
                                              failed) ||
         warehousesim::apps::readStringOption(argc, argv, i, "--record", recordFile, failed) ||
         warehousesim::apps::readStringOption(argc, argv, i, "--replay", replayFile, failed) ||
@@ -219,7 +234,7 @@ int main(int argc, char** argv) {
   const bool recording = !recordFile.empty();
   if (failed || source.conflicting() ||
       (replaying && (recording || seedGiven || intervalGiven || !source.layout.empty() ||
-                     !source.mapFile.empty())) ||
+                     !source.mapFile.empty() || source.robots || source.spawn)) ||
       (!replaying && noVerify) || (intervalGiven && !recording)) {
     printUsage(std::cerr);
     return 2;
@@ -236,7 +251,7 @@ int main(int argc, char** argv) {
     if (replaying) {
       return replayRecording(replayFile,
                              ticksGiven ? std::optional<std::uint64_t>(ticks) : std::nullopt,
-                             !noVerify, metrics);
+                             !noVerify, threads, metrics);
     }
     auto made = warehousesim::apps::makeSimulation(source, seed, std::cerr);
     if (!made.simulation) {
@@ -246,6 +261,7 @@ int main(int argc, char** argv) {
       }
       return 1;
     }
+    made.simulation->usePlanningThreads(static_cast<std::size_t>(threads));
     return runLive(std::move(*made.simulation), ticks, metrics, recordFile, checkpointInterval,
                    source, seed);
   } catch (const std::exception& error) {

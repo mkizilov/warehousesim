@@ -7,6 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "warehousesim/core/point.hpp"
@@ -262,6 +263,64 @@ TEST(WarehouseTest, ShelfAccessPointsAreFreeCellsNextToShelves) {
   const Warehouse w = layout({"S..", "...", "..D"});
   const std::vector<Point> expected = {P(1, 0), P(0, 1)};
   EXPECT_EQ(w.shelfAccessPoints(), expected);
+}
+
+TEST(WarehouseTest, AVersionNamesTheLayoutAsItIsNowAndOnlyAnEditChangesIt) {
+  Warehouse a(4, 3);
+  const Warehouse b(4, 3);
+  EXPECT_NE(a.version(), b.version()) << "two layouts made separately are never the same layout";
+
+  const Warehouse copy = a;
+  EXPECT_EQ(copy.version(), a.version());
+  Warehouse assigned(2, 2);
+  assigned = a;
+  EXPECT_EQ(assigned.version(), a.version());
+
+  const std::uint64_t before = a.version();
+  (void)a.at(P(1, 1));
+  (void)a.neighbors(P(1, 1));
+  (void)a.cellsOfType(CellType::Free);
+  (void)a.toRows();
+  EXPECT_EQ(a.version(), before) << "looking changes nothing";
+
+  a.set(P(1, 1), CellType::Wall);
+  EXPECT_NE(a.version(), before);
+  EXPECT_EQ(copy.version(), before) << "the copy is the layout as it was";
+  const std::uint64_t edited = a.version();
+  a.set(P(1, 1), CellType::Free);  // back to what it looked like: still not the same version
+  EXPECT_NE(a.version(), edited);
+  EXPECT_NE(a.version(), before);
+
+  EXPECT_THROW(a.set(P(9, 9), CellType::Wall), std::out_of_range);
+}
+
+TEST(WarehouseTest, ParsedLayoutsEachGetTheirOwnVersion) {
+  const Warehouse first = layout({"..", ".."});
+  const Warehouse second = layout({"..", ".."});
+  EXPECT_NE(first.version(), second.version());
+  EXPECT_EQ(first.toRows(), second.toRows());
+}
+
+TEST(WarehouseTest, VersionsAreDistinctAcrossThreadsMakingLayoutsAtOnce) {
+  std::vector<std::vector<std::uint64_t>> made(4);
+  std::vector<std::thread> threads;
+  for (std::size_t t = 0; t < made.size(); ++t) {
+    threads.emplace_back([&made, t] {
+      for (int i = 0; i < 500; ++i) {
+        Warehouse w(2, 2);
+        w.set(P(0, 0), CellType::Wall);
+        made[t].push_back(w.version());
+      }
+    });
+  }
+  for (std::thread& thread : threads) {
+    thread.join();
+  }
+  std::set<std::uint64_t> all;
+  for (const auto& versions : made) {
+    all.insert(versions.begin(), versions.end());
+  }
+  EXPECT_EQ(all.size(), 2000U);
 }
 
 TEST(WarehouseTest, ShelfAccessPointsExcludeSpecialCellsAndDiagonals) {

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -304,6 +305,56 @@ TEST(CooperativeRouterTest, TheTailBeyondTheWindowFallsBackWhenStandingRobotsBlo
   ASSERT_EQ(outcome.kind, RouteOutcomeKind::Rerouted);
   EXPECT_TRUE(outcome.partial);
   EXPECT_EQ(outcome.path.back(), P(25, 1));
+}
+
+// The cells to steer clear of can be handed over as a function, called only if a plan falls short
+// of the destination and needs them (making the set costs more than a short search).
+TEST(CooperativeRouterTest,
+     StandingRobotsAreOnlyAskedForWhenThePlanFallsShortAndThenSteeredAround) {
+  // Open floor to x = 7, then a corridor along the middle row with a bypass above it from x = 12 to
+  // 18: through (15, 1) is the one shortest way, and round it by the bypass two cells longer.
+  std::vector<std::string> rows(3, std::string(30, '#'));
+  for (int x = 0; x < 30; ++x) {
+    rows[1][static_cast<std::size_t>(x)] = '.';
+    if (x < 8) {
+      rows[0][static_cast<std::size_t>(x)] = '.';
+      rows[2][static_cast<std::size_t>(x)] = '.';
+    }
+    if (x >= 12 && x <= 18) {
+      rows[0][static_cast<std::size_t>(x)] = '.';
+    }
+  }
+  Harness h(layout(rows));
+  h.options.window = 6;
+  const ReservationTable table = tableWithParkedRobot(h.floor, P(2, 1));
+  int asked = 0;
+  const std::function<BlockedSet()> parked = [&asked] {
+    ++asked;
+    return BlockedSet{P(15, 1)};  // one robot standing still on the straight way
+  };
+  const auto reroute = [&](const Robot& robot) {
+    return h.router.reroute({h.floor, table, robot, 0, h.planner, h.avoid, h.options, &parked});
+  };
+
+  // A plan that reaches the destination within the window never needs them.
+  const RouteOutcome near = reroute(robotOn(2, P(0, 1), route(P(0, 1), P(5, 2))));
+  EXPECT_FALSE(near.partial);
+  EXPECT_EQ(asked, 0);
+
+  // One that ends with the window asks once, and the rest of the way goes round what it is told.
+  const RouteOutcome far = reroute(robotOn(2, P(0, 1), route(P(0, 1), P(25, 1))));
+  ASSERT_EQ(far.kind, RouteOutcomeKind::Rerouted);
+  ASSERT_TRUE(far.partial);
+  EXPECT_EQ(asked, 1);
+  EXPECT_EQ(far.path.back(), P(25, 1));
+  EXPECT_TRUE(std::find(far.path.begin(), far.path.end(), P(15, 1)) == far.path.end())
+      << "the standing robot's cell is steered around";
+
+  // Without the function the same route runs straight through that cell.
+  const RouteOutcome blind = h.reroute(table, robotOn(2, P(0, 1), route(P(0, 1), P(25, 1))));
+  ASSERT_EQ(blind.kind, RouteOutcomeKind::Rerouted);
+  EXPECT_TRUE(std::find(blind.path.begin(), blind.path.end(), P(15, 1)) != blind.path.end());
+  EXPECT_EQ(blind.path.size() + 2, far.path.size()) << "the way round is two cells longer";
 }
 
 TEST(CooperativeRouterTest, TheSearchStartsWhereTheGrantedCellsEndAndWhenTheRobotGetsThere) {

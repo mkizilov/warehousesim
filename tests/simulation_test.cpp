@@ -411,6 +411,25 @@ TEST(SimulationRobotTest, LowRobotsPickADifferentChargerWhenTheNearestIsTaken) {
   EXPECT_EQ(sim.robots()[1].position(), P(6, 0));
 }
 
+TEST(SimulationRobotTest, WhenTwoChargersAreEquallyNearTheFirstInReadingOrderIsChosen) {
+  SimulationConfig config;
+  config.robot.lowBatteryLevel = 5000;
+  config.robot.initialCharge = 1000;
+  {
+    Simulation sim(layout({"C.....C"}), {P(3, 0)}, config);  // three cells from each
+    sim.run(9);
+    EXPECT_EQ(sim.robots()[0].state(), RobotState::Charging);
+    EXPECT_EQ(sim.robots()[0].position(), P(0, 0));
+  }
+  {
+    // Four cells from each, and (4, 0) comes before (0, 4) in reading order (row by row).
+    Simulation sim(layout({"....C", ".....", ".....", ".....", "C...."}), {P(0, 0)}, config);
+    sim.run(12);
+    EXPECT_EQ(sim.robots()[0].state(), RobotState::Charging);
+    EXPECT_EQ(sim.robots()[0].position(), P(4, 0));
+  }
+}
+
 TEST(SimulationRobotTest, WithoutChargersTheLowBatteryReserveIsIgnored) {
   SimulationConfig config;
   config.robot.lowBatteryLevel = 5000;

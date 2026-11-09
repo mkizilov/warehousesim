@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <unordered_set>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include "warehousesim/core/point.hpp"
 #include "warehousesim/planning/path_planner.hpp"
 #include "warehousesim/planning/space_time_astar.hpp"
+#include "warehousesim/robots/forecast.hpp"
 #include "warehousesim/robots/robot.hpp"
 #include "warehousesim/traffic/reservation_table.hpp"
 #include "warehousesim/world/warehouse.hpp"
@@ -99,12 +101,19 @@ class CooperativeRouter {
     planning::PathPlanner& tailPlanner;
     const planning::BlockedSet& avoid;
     CooperativeRouterOptions options;
+    // If set, the cells to avoid are made by calling this, when (and only if) a plan falls short of
+    // the destination and needs them, instead of being taken from `avoid`. Making the set can cost
+    // more than the search it is for.
+    const std::function<planning::BlockedSet()>* avoidLater = nullptr;
   };
 
   [[nodiscard]] RouteOutcome reroute(const Request& request);
 
  private:
   planning::SpaceTimeAStar search_;
+  std::optional<robots::Robot>
+      walkerSlot_;  // working copy for forecasts, kept to spare its storage
+  robots::ForecastBuffer forecast_;
 };
 
 // How the current route fares when followed with waits: used by CooperativeRouter, public so that

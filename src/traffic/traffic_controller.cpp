@@ -15,25 +15,22 @@ using robots::Robot;
 
 namespace {
 
-// The cell a robot stands on followed by the cells it has been granted ahead: what it holds.
-std::vector<Point> currentHolds(const Robot& robot) {
-  std::vector<Point> holds = {robot.position()};
-  for (std::size_t i = 0; i < robot.authority(); ++i) {
-    holds.push_back(robot.path()[i]);
-  }
-  return holds;
-}
-
-// Turns a per-step list of held cells into requests: the edges between consecutive held cells,
-// then the cells themselves. Within a step the edges come first because that is how a head-on swap
-// is told from a plain clash: two robots exchanging cells clash on both, and the first request
-// that fails is the one reported. Cells held for several steps in a row become one request.
-std::vector<Request> toRequests(const std::vector<std::vector<Point>>& holds, Step first) {
-  std::vector<Request> requests;
-  std::vector<std::pair<Point, std::size_t>> latest;  // cell -> index of its newest request
-  for (std::size_t s = 0; s < holds.size(); ++s) {
+// Turns per-step lists of held cells into requests, in `requests` (cleared first): the edges
+// between consecutive held cells, then the cells themselves. Within a step the edges come first
+// because that is how a head-on swap is told from a plain clash: two robots exchanging cells clash
+// on both, and the first request that fails is the one reported. Cells held for several steps in a
+// row become one request. `holdsAt(s)` is the cells held during step `first + s`, as a span;
+// `latest` is working storage, kept by the caller so that building requests does not allocate once
+// it has grown.
+template <class HoldsAt>
+void buildRequests(std::vector<Request>& requests,
+                   std::vector<std::pair<Point, std::size_t>>& latest, std::size_t steps,
+                   Step first, const HoldsAt& holdsAt) {
+  requests.clear();
+  latest.clear();  // cell -> index of its newest request
+  for (std::size_t s = 0; s < steps; ++s) {
     const Step step = first + s;
-    const std::vector<Point>& cells = holds[s];
+    const std::span<const Point> cells = holdsAt(s);
     for (std::size_t i = 0; i + 1 < cells.size(); ++i) {
       requests.emplace_back(Traverse{cells[i], cells[i + 1], step});
     }
@@ -51,7 +48,6 @@ std::vector<Request> toRequests(const std::vector<std::vector<Point>>& holds, St
       }
     }
   }
-  return requests;
 }
 
 // Standing still with nothing granted, so that it can hold off for a step and then set out.
@@ -70,16 +66,66 @@ std::optional<std::size_t> indexInRoute(const std::vector<Point>& route, Point c
 }  // namespace
 
 TrafficController::TrafficController(const world::Warehouse& warehouse, std::size_t horizon)
-    : table_(warehouse), horizon_(horizon) {
+    : table_(warehouse), routeCount_(table_.size().cellCount(), 0), horizon_(horizon) {
   if (horizon < 2) {
     throw std::invalid_argument("the reservation horizon must be at least two steps");
   }
 }
 
+// The cell a robot stands on followed by the cells it has been granted ahead: what it holds, as the
+// requests to put on the table for the current step.
+const std::vector<Request>& TrafficController::currentHoldsRequests(const Robot& robot) {
+  holds_.clear();
+  holds_.push_back(robot.position());
+  for (std::size_t i = 0; i < robot.authority(); ++i) {
+    holds_.push_back(robot.path()[i]);
+  }
+  buildRequests(factRequests_, latest_, 1, now_,
+                [this](std::size_t) { return std::span<const Point>(holds_); });
+  return factRequests_;
+}
+
+// The working copy of `robot` that forecasts are made with (its route cut after `cutTo` cells, if
+// given). Overwritten by the next call; kept so that making it does not allocate.
+Robot& TrafficController::walker(const Robot& robot, std::optional<std::size_t> cutTo) {
+  if (!walkerSlot_) {
+    walkerSlot_.emplace(robot);
+  }
+  if (cutTo) {
+    walkerSlot_->assignRouteCutOf(robot, *cutTo);
+  } else {
+    *walkerSlot_ = robot;
+  }
+  return *walkerSlot_;
+}
+
+void TrafficController::countRoute(const Point cell, int by) {
+  const world::GridSize size = table_.size();
+  if (!size.contains(cell)) {
+    return;
+  }
+  std::uint32_t& count = routeCount_[size.indexOf(cell)];
+  if (by > 0) {
+    if (count++ == 0) {
+      routeCells_.push_back(size.indexOf(cell));
+    }
+  } else {
+    --count;
+  }
+}
+
+bool TrafficController::onSomeRoute(const Point cell) const {
+  const world::GridSize size = table_.size();
+  return size.contains(cell) && routeCount_[size.indexOf(cell)] > 0;
+}
+
 void TrafficController::beginStep(core::Tick now, std::span<const Robot> fleet,
                                   std::span<const RobotId> priority) {
   table_.clear();
-  routes_.clear();
+  for (const std::size_t index : routeCells_) {
+    routeCount_[index] = 0;
+  }
+  routeCells_.clear();
   lastRoute_.clear();
   now_ = now;
   began_ = true;
@@ -104,9 +150,7 @@ void TrafficController::beginStep(core::Tick now, std::span<const Robot> fleet,
   }
 
   for (const Robot& robot : fleet) {
-    const std::vector<Point> holds = currentHolds(robot);
-    const std::vector<Request> facts = toRequests({holds}, now);
-    if (table_.reserveAll(robot.id(), facts)) {
+    if (table_.reserveAll(robot.id(), currentHoldsRequests(robot))) {
       throw std::logic_error("two robots hold the same cell");
     }
   }
@@ -126,7 +170,7 @@ void TrafficController::relocate(const Robot& robot) {
   table_.release(id);
   // If this clashes with a reservation that was made earlier in the step, leave the robot off the
   // table: plan() copes with a robot that holds a cell somebody has reserved.
-  const bool placed = !table_.reserveAll(id, toRequests({currentHolds(robot)}, now_));
+  const bool placed = !table_.reserveAll(id, currentHoldsRequests(robot));
   if (placed && !robot.hasPath()) {
     (void)table_.reserve(id, Occupy{robot.position(), {now_ + 1, now_ + horizon_}});
   }
@@ -142,30 +186,29 @@ TrafficPlan TrafficController::planAndRecord(const Robot& robot, bool again) {
       throw std::logic_error("only the robot planned last can be planned again");
     }
     for (const Point cell : lastRoute_) {
-      if (--routes_[cell] == 0) {
-        routes_.erase(cell);
-      }
+      countRoute(cell, -1);
     }
   }
   TrafficPlan result = planRoute(robot, again);
   // Only now, so that a robot never counts its own route against itself.
   lastRoute_.assign(robot.path().begin(), robot.path().end());
   for (const Point cell : lastRoute_) {
-    ++routes_[cell];
+    countRoute(cell, +1);
   }
   return result;
 }
 
 std::size_t TrafficController::reserveDelayed(const Robot& robot) {
-  const std::vector<std::vector<Point>> forecast = robots::forecastHolds(robot, horizon_);
+  robots::forecastHolds(walker(robot), horizon_, forecast_);
   const std::size_t longest = std::min<std::size_t>(horizon_ / 2, 6);
   for (std::size_t delay = 1; delay <= longest; ++delay) {
-    std::vector<std::vector<Point>> holds(delay, std::vector<Point>{robot.position()});
-    holds.insert(holds.end(), forecast.begin(),
-                 forecast.begin() + static_cast<std::ptrdiff_t>(horizon_ - delay));
-    const std::vector<Request> requests = toRequests(holds, now_);
-    if (!table_.earliestConflict(robot.id(), requests)) {
-      (void)table_.reserveAll(robot.id(), requests);
+    // The robot stays where it is for `delay` steps, then does what it was going to.
+    const Point here = robot.position();
+    buildRequests(delayRequests_, latest_, horizon_, now_, [&](std::size_t s) {
+      return s < delay ? std::span<const Point>(&here, 1) : forecast_.holdsAt(s - delay);
+    });
+    if (!table_.earliestConflict(robot.id(), delayRequests_)) {
+      (void)table_.reserveAll(robot.id(), delayRequests_);
       return delay;
     }
   }
@@ -189,7 +232,7 @@ TrafficPlan TrafficController::planRoute(const Robot& robot, bool replanning) {
   table_.release(id);
   TrafficPlan result;
   result.clearedCells = robot.path().size();
-  if (const auto clash = table_.reserveAll(id, toRequests({currentHolds(robot)}, now_))) {
+  if (const auto clash = table_.reserveAll(id, currentHoldsRequests(robot))) {
     // Another robot reserved a cell this one holds. The facts were consistent when the step began,
     // so this robot must have been moved since (see relocate) onto a cell that a robot planned
     // before it was already counting on. Waiting cannot get it out of the way; it is left to the
@@ -205,10 +248,12 @@ TrafficPlan TrafficController::planRoute(const Robot& robot, bool replanning) {
     return result;
   }
 
-  const std::vector<Request> whole = toRequests(robots::forecastHolds(robot, horizon_), now_);
-  const std::optional<Conflict> first = table_.earliestConflict(id, whole);
+  robots::forecastHolds(walker(robot), horizon_, forecast_);
+  buildRequests(wholeRequests_, latest_, horizon_, now_,
+                [this](std::size_t s) { return forecast_.holdsAt(s); });
+  const std::optional<Conflict> first = table_.earliestConflict(id, wholeRequests_);
   if (!first) {
-    (void)table_.reserveAll(id, whole);
+    (void)table_.reserveAll(id, wholeRequests_);
     return result;
   }
 
@@ -226,8 +271,8 @@ TrafficPlan TrafficController::planRoute(const Robot& robot, bool replanning) {
   }
   // Hold the robot back before the first cell it cannot have, and reserve where it will wait. If
   // waiting there clashes too, back up to before that cell, and so on.
-  const std::vector<Point> route(robot.path().begin(), robot.path().end());
-  std::optional<std::size_t> blockedAt = indexInRoute(route, first->cell);
+  route_.assign(robot.path().begin(), robot.path().end());
+  std::optional<std::size_t> blockedAt = indexInRoute(route_, first->cell);
   while (true) {
     if (!blockedAt || *blockedAt < robot.authority()) {
       ++stats_.inTheWay;
@@ -239,14 +284,15 @@ TrafficPlan TrafficController::planRoute(const Robot& robot, bool replanning) {
     // Do not wait on a cell that a robot with priority will drive through, even if that is further
     // ahead than the table looks: a robot waiting in a corridor would be in the way as soon as the
     // other got there. Wait earlier if there is an earlier place.
-    const Point waitingCell = keep == 0 ? robot.position() : route[keep - 1];
-    if (keep > robot.authority() && routes_.contains(waitingCell)) {
+    const Point waitingCell = keep == 0 ? robot.position() : route_[keep - 1];
+    if (keep > robot.authority() && onSomeRoute(waitingCell)) {
       blockedAt = keep - 1;
       continue;
     }
-    const std::vector<Request> cut =
-        toRequests(robots::forecastHolds(robot.withRouteCutTo(keep), horizon_), now_);
-    const std::optional<Conflict> again = table_.earliestConflict(id, cut);
+    robots::forecastHolds(walker(robot, keep), horizon_, forecast_);
+    buildRequests(cutRequests_, latest_, horizon_, now_,
+                  [this](std::size_t s) { return forecast_.holdsAt(s); });
+    const std::optional<Conflict> again = table_.earliestConflict(id, cutRequests_);
     if (!again) {
       // A robot at rest that cannot take its next cell this step or the next (somebody is on it, or
       // about to be) reserves what it will do, which is to wait a little and then go, rather than
@@ -260,11 +306,11 @@ TrafficPlan TrafficController::planRoute(const Robot& robot, bool replanning) {
           return result;
         }
       }
-      (void)table_.reserveAll(id, cut);
+      (void)table_.reserveAll(id, cutRequests_);
       result.clearedCells = keep;
       return result;
     }
-    blockedAt = indexInRoute(route, again->cell);
+    blockedAt = indexInRoute(route_, again->cell);
     if (blockedAt && *blockedAt >= keep) {
       blockedAt = keep > 0 ? std::optional<std::size_t>(keep - 1) : std::nullopt;  // always back up
     }
