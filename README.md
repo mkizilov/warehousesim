@@ -46,9 +46,10 @@ core ← robots ──────────┴← tasks ┐
 
 ## Status
 
-Version 1.0.0. Checked locally on **macOS 27.2, Apple M4 (arm64), Apple clang 21**, and in hosted CI (second run,
-commit `69afde0`) on **Ubuntu 24.04 (x86-64) with clang** and **macOS 26 (arm64)**. The full table, with the
-checks behind each row and a checklist for a real window, is [docs/verification.md](docs/verification.md).
+Version 1.0.0. Checked locally on **macOS 27.2, Apple M4 (arm64), Apple clang 21**, and in hosted CI (third run,
+commit `f03538d`) on **Ubuntu 24.04 (x86-64) with clang and with GCC 13** and **macOS 26 (arm64)**. The full
+table, with the checks behind each row and a checklist for a real window, is
+[docs/verification.md](docs/verification.md).
 
 - **Verified** (checks run on macOS, and passing): the engine and its modules; collision safety (no
   overlap, swap or doubly held cell in 666 333 audited states); planning, tasks, metrics, the map file and the
@@ -56,16 +57,17 @@ checks behind each row and a checklist for a real window, is [docs/verification.
   gate, the release archive. 1 538 tests pass in the Debug build with the GUI and in the Release build, and 1 533
   under AddressSanitizer + UBSan and under ThreadSanitizer (0 reports); clang-tidy (0 findings) and
   clang-format are clean; macOS `leaks` finds no leak in 18 programs. The hosted runs passed the same suite on
-  Ubuntu with clang, with AddressSanitizer (leak detection on), ThreadSanitizer and clang-tidy, and on macOS 26.
+  Ubuntu with clang, with AddressSanitizer (leak detection on), ThreadSanitizer and clang-tidy, on macOS 26,
+  and with GCC 13.
 - **Partial** (works, but a requirement is only partly met): cooperative planning is neither complete nor
   optimal. Fleets bigger than the work needs make less progress than smaller ones, and one-cell corridors with
   three or more robots can deadlock, safely. The fleet interface cannot cancel a task, take a robot out of
   service or edit the layout. Recordings cannot be authored from the CLI or watched in a window.
 - **Implemented, unverified**: the GUI and the editor in interactive use (they start, render and exit on the
-  real macOS window system, but keys, mouse and appearance have not been checked); builds with GCC 13 and MSVC
-  (each stopped at a compile error in both hosted runs; the second run's errors are fixed and have not run
-  since, and the code compiles with a local GCC 16.2.0 without a diagnostic), Windows, checksums with GCC and
-  MSVC, and Valgrind.
+  real macOS window system, but keys, mouse and appearance have not been checked); Windows with MSVC (the
+  Debug headless build compiles and passes 1 533 of 1 538 tests in hosted CI; the five failures were in the
+  tests, are fixed and have not run since; the Release configuration, packaging, the GUI and the editor have
+  not run on Windows), and Valgrind.
 
 What comes next, in priority order, is in [ROADMAP.md](ROADMAP.md).
 

@@ -164,12 +164,29 @@ regenerate the recording fixture (see AGENTS.md, "Changing what a simulation com
 | `sanitizers` | `asan` and `tsan` on Ubuntu, the whole suite |
 | `clang-tidy` | the `tidy` preset on Ubuntu (experimental) |
 
-Every preset has been run locally on macOS (Apple clang 21, arm64). In the second hosted run (commit
-`69afde0`) every required job passed (`format`, `clang-tidy`, the two Ubuntu clang jobs, the two macOS jobs on
-`macos-26`, `asan` with leak detection, `tsan`); the experimental GCC 13 and MSVC jobs failed to compile, as in
-the first run, at errors that are fixed afterwards and have not run since. A build stops at its first failing
-target, so a red GCC or MSVC job may show the next error: treat it as information about the platform, not
-necessarily a regression. [verification.md](verification.md) keeps the list of what has passed.
+Every preset has been run locally on macOS (Apple clang 21, arm64). In the third hosted run (commit `f03538d`)
+every required job passed (`format`, `clang-tidy`, the two Ubuntu clang jobs, the two macOS jobs on `macos-26`,
+`asan` with leak detection, `tsan`) and so did the experimental GCC 13 job; the experimental MSVC job built and
+failed five of its 1 538 tests, in ways that are fixed afterwards and have not run since. A build stops at its
+first failing target, so a red GCC or MSVC job may show the next error: treat it as information about the
+platform, not necessarily a regression. [verification.md](verification.md) keeps the list of what has passed.
+
+### Portability of the tests
+
+Three things have made tests pass on Linux and macOS and fail on Windows, and are worth knowing before writing
+one:
+
+- **Allocation counts.** `planning_alloc_test.cpp` counts calls to `operator new`. Make every input outside the
+  measured region (an empty `BlockedSet` is two vectors), and put nothing but the call inside. MSVC's Debug
+  STL (`_ITERATOR_DEBUG_LEVEL` 2) allocates a small proxy each time a vector is made or moved into, which
+  libc++, libstdc++ and MSVC's Release configuration do not; where a vector cannot be avoided, measure what the
+  library charges for it (`vectorBookkeeping()`) rather than assuming zero.
+- **Line endings.** git for Windows checks text out with CRLF. Files that a test compares byte for byte with
+  what the code writes (the example maps) are pinned to LF in `.gitattributes`; add a file to it when a test
+  starts doing the same with another.
+- **Timing.** Sleeps and condition-variable waits have a coarse timer on Windows (around 15 ms), and a
+  simulated run of a few hundred ticks takes less than that. A test must not depend on being in time to see the
+  middle of a run: hold the worker at a limit (`start(untilTick)`), or paused, and take the look there.
 
 ### GCC diagnostics without GCC 13
 

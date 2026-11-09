@@ -16,10 +16,10 @@ measurements this roadmap cites are in [docs/benchmarks.md](docs/benchmarks.md) 
 | Group | Steps | Hours |
 |---|---|---:|
 | A. Requirements only partly met | 1 to 4 | 94 |
-| B. Verification, correctness and security gaps | 5 to 12 | 103 |
+| B. Verification, correctness and security gaps | 5 to 12 | 96 |
 | C. Code health that lowers risk | 13 | 16 |
 | D. New features | 14 to 20 | 162 |
-| **Total** | **20 steps** | **375** |
+| **Total** | **20 steps** | **368** |
 
 ---
 
@@ -141,35 +141,35 @@ cannot be watched, only run headless; replay takes as long as running.
 
 ## B. Verification, correctness and security gaps
 
-## 5. Get the GCC 13 and MSVC jobs green
+## 5. Get the MSVC job green, and run the release workflow
 
-**Scope.** Re-run `ci.yml` after the fixes to the GCC 13 and MSVC build errors, and fix whatever those builds
-report beyond them (a build stops at its first failing target). Run the tests on both compilers, compare the
-state checksums with those of macOS and Ubuntu clang, run `release.yml` once, and decide and document the
-supported platforms.
+**Scope.** Re-run `ci.yml` after the fixes to the five tests that failed on Windows, and fix whatever else the
+MSVC job reports. Run the Windows build in the Release configuration too, build and unpack the `.zip`, run
+`release.yml` once, and decide and document the supported platforms.
 
-**Rationale.** The second hosted run (commit `69afde0`) passed every required job: Ubuntu 24.04 with clang
-(Debug and Release with the GUI, AddressSanitizer with leak detection, ThreadSanitizer, clang-tidy, formatting)
-and macOS 26 on arm64 (Debug and Release with the GUI), so the pinned checksum test, the regression baseline and
-the recording fixture agree on macOS arm64 and Ubuntu x86-64. The experimental GCC 13 and MSVC jobs have stopped
-at their build step in both runs, each time at errors that are fixed afterwards; the latest fixes have not run.
-The Windows tests have never run, and `-ffp-contract=off` is a GCC and clang flag: MSVC's floating-point mode has
-not been examined.
+**Rationale.** The third hosted run (commit `f03538d`) passed every required job (Ubuntu 24.04 with clang,
+Debug and Release with the GUI, AddressSanitizer with leak detection, ThreadSanitizer, clang-tidy, formatting;
+macOS 26 on arm64, Debug and Release with the GUI) and the experimental GCC 13 job, so the pinned checksum test,
+the recording fixture and the rest of the suite agree on macOS arm64, Ubuntu x86-64 with clang and with GCC 13.
+The experimental MSVC job built and ran all 1 538 tests; five failed, for reasons in the tests (allocation counts
+that included the MSVC Debug STL's own bookkeeping, example maps checked out with CRLF, a timing assumption in a
+runner test). They are fixed and have not run since, and nothing of Windows other than the Debug headless build
+has run: the Release configuration, the packaging, the GUI and the editor. `-ffp-contract=off` is a GCC and clang
+flag; MSVC's floating-point mode has not been examined, although the checksum tests were not among the failures.
 
 **Dependencies.** The repository published and a hosted CI available (both are).
 
 **Acceptance criteria.**
 
-- All non-experimental jobs green on the main branch for three runs in a row (they were green in the second run).
-- The GCC 13 job green, with `ThePinnedScenarioHasThePinnedChecksums` and the fixture replay passing, or the
-  divergence traced to its cause and either fixed or documented with a plan (for example, a per-platform
-  checksum). The same for MSVC.
-- Windows headless is green, or declared unsupported in the README with the reason.
+- All non-experimental jobs green on the main branch for three runs in a row (they were green in the second and
+  third runs).
+- The MSVC job green, with `ThePinnedScenarioHasThePinnedChecksums` and the fixture replay passing in Debug
+  and in Release (or the divergence traced to its cause and either fixed or documented with a plan, for example
+  a per-platform checksum), or Windows declared unsupported in the README with the reason.
 - `release.yml` has run once and produced its archives.
 - The verification document moves each platform from unverified to verified, with the run it comes from.
 
-**Effort.** 17 h (GCC 4, Windows and MSVC 10, the release workflow 1, checksums and documents 2).
-Uncertain: plus or minus 40 %.
+**Effort.** 10 h (Windows and MSVC 8, the release workflow 1, documents 1). Uncertain: plus or minus 40 %.
 
 ## 6. Verify the GUI and editor in a real window, and automate what can be
 
@@ -534,13 +534,13 @@ there is no generated reference and the libraries are internal.
 | Group | Steps | Hours |
 |---|---|---:|
 | A. Requirements only partly met | 1 (26), 2 (24), 3 (16), 4 (28) | 94 |
-| B. Verification, correctness and security | 5 (17), 6 (19), 7 (8), 8 (16), 9 (8), 10 (10), 11 (11), 12 (14) | 103 |
+| B. Verification, correctness and security | 5 (10), 6 (19), 7 (8), 8 (16), 9 (8), 10 (10), 11 (11), 12 (14) | 96 |
 | C. Code health | 13 (16) | 16 |
 | D. Features | 14 (24), 15 (16), 16 (32), 17 (40), 18 (20), 19 (18), 20 (12) | 162 |
-| **Total** | **20 steps** | **375** |
+| **Total** | **20 steps** | **368** |
 
-About 63 working days for one engineer (375 hours at 6 productive hours a day), or about 13 weeks. Groups A to C
-alone are 213 hours, about 36 working days. With two engineers working in parallel on independent steps
+About 61 working days for one engineer (368 hours at 6 productive hours a day), or about 12 weeks. Groups A to C
+alone are 206 hours, about 34 working days. With two engineers working in parallel on independent steps
 (for example 1 and 5, then 2 and 6) the calendar time is roughly 7 to 8 weeks.
 
 **Suggested order.** Steps 1, 5 and 6 first and in parallel: they decide whether the product behaves well, runs

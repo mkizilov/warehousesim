@@ -12,8 +12,14 @@
   unchanged), three references to the result of `asText` are copies (GCC `-Wdangling-reference`), and the
   compile-time allocation comparison in the regression bench is an `if constexpr` (MSVC C4127). No behaviour
   change, no warning switched off.
+- Test fixes for the five tests that failed in the third hosted run (MSVC, Debug): the A* allocation tests
+  count the planner's own allocations (the empty blocked set is made outside the measured region, and the
+  cost the MSVC Debug STL charges for each vector is measured and added, so the numbers on libc++ and
+  libstdc++ are the ones they were); `.gitattributes` checks the example maps out with LF, which the test
+  that compares them byte for byte with the writer's output needs; the runner recording test holds the worker
+  at a tick limit for its mid-run recording instead of racing the run. No source of the simulator changed.
 - `docs/verification.md` records the hosted runs and which jobs have not run since their fixes; the developer
-  guide says how to see GCC's diagnostics locally.
+  guide says how to see GCC's diagnostics locally and what made tests fail on Windows.
 - `LICENSE`: the MIT license. The release archive installs it with the documents.
 - `scripts/leaks_macos.sh`: runs the command line program, the GUI, the editor and every test executable under
   macOS `leaks --atExit`, each bounded by a time limit (18 programs, 0 leaks).

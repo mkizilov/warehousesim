@@ -104,7 +104,10 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   standard library, so changing tie-breaking is a deliberate act that also updates the golden hash in
   `ResultsAreReproducibleAcrossPlatforms`. A* behaviour changes need a matching check against the
   reference search in `tests/astar_reference_test.cpp`. Do not reintroduce per-search allocation:
-  `planning_alloc_test.cpp` must stay green.
+  `planning_alloc_test.cpp` must stay green. It counts only the planner's own allocations: inputs, including
+  the empty `BlockedSet` (two vectors), are made outside the measured region, and what a checked standard
+  library charges per vector (MSVC's Debug STL allocates a proxy; `vectorBookkeeping()` measures it) is added
+  to an expectation, never subtracted from the planner's budget or skipped.
 - Benchmarks (`bench/`) never assert on timing, since that flakes. They cross-check results instead, and
   numbers are only quoted from an optimised build. `src/` must never depend on `testing/`.
 - Tasks change status only through `TaskQueue`, and a task is claimed only by `TaskQueue::tryAssign`,
@@ -294,10 +297,14 @@ Each module is a static library `warehousesim::<module>` in `src/<module>/`, wit
   `SimulationRunner` and the GUI sleep.
 - Tests must not depend on real time for correctness. Threaded tests wait on `waitForTick` (with a
   generous timeout), never on fixed sleeps; sleeps are allowed only to check that something does *not* happen.
+  A test that needs to look at a run half way holds the worker there (`start(untilTick)` or `setPaused`)
+  instead of racing it: a short run is over in less time than a Windows sleep lasts.
 - Tests are not allowed to touch the network, the display, or files outside the build tree. Tests that
   need files use `tests/scratch_dir.hpp` (`ScratchDir`), which creates a uniquely named directory below
   the working directory (the build tree under ctest) and removes it again. The end-to-end tests also read
-  (never write) the checked-in `examples/` through `WAREHOUSESIM_EXAMPLES_DIR`.
+  (never write) the checked-in `examples/` through `WAREHOUSESIM_EXAMPLES_DIR`. Files that a test compares
+  byte for byte with what the code writes are pinned to LF in `.gitattributes` (git for Windows would check
+  them out with CRLF); the comparison is not relaxed.
 - Fix bugs by adding a regression test first or alongside. Never weaken or delete a test to make it pass.
 
 ### Memory safety and resource cleanup

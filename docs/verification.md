@@ -48,24 +48,47 @@ Hosted runners are a separate platform and are covered under Hosted CI below.
 
 ### Hosted CI
 
-`ci.yml` has run twice on hosted runners: run 42566965565 on commit `315b9b8` and run 42576051990 on commit
-`69afde0`. Job results, from the GitHub API:
+`ci.yml` has run three times on hosted runners: run 42566965565 on commit `315b9b8`, run 42576051990 on
+`69afde0` and run 42582839103 on `f03538d`. Job results, from the GitHub API:
 
-| Job | Run 1 (`315b9b8`) | Run 2 (`69afde0`) |
+| Job | Run 1 (`315b9b8`) | Run 2 (`69afde0`) | Run 3 (`f03538d`) |
+|---|---|---|---|
+| `format` | passed | passed | passed |
+| `clang-tidy` | passed | passed | passed |
+| `build-test`, Ubuntu 24.04 (x86-64), clang, Debug + GUI | passed: build and all tests; the scenario campaign, example audits, record and replay, metrics export, and the GUI and editor smoke runs on the dummy driver | passed | passed |
+| `build-test`, Ubuntu 24.04, clang, Release + GUI | passed: the same, plus the planning, fleet and scaling benchmarks, the regression gate and the packaged program | passed | passed |
+| `sanitizers`, `asan` (run with `ASAN_OPTIONS=detect_leaks=1`) and `tsan` | passed, the whole suite each | passed | passed |
+| `build-test`, macOS, clang, Debug + GUI | cancelled before any step: the `macos-14` image had been retired | passed on `macos-26`: build, all tests, campaign, example audits, record and replay, metrics export, GUI and editor smoke runs | passed |
+| `build-test`, macOS, clang, Release + GUI | cancelled, as above | passed: the same, plus the benchmarks, the regression gate, the macOS leak check (a `continue-on-error` step that reported success; its log was not read) and the packaged program | passed |
+| `build-test`, Ubuntu, GCC 13, headless (experimental) | failed to compile: `-Werror=sign-conversion`, a `uint64_t` counter increased by an `int` ternary (fixed in `1ff3bad`, `53725a2`) | failed to compile: `-Werror=shadow` (the enumerator `EventSource::Command` against the `Command` alias, `recording.hpp:53`) and `-Werror=dangling-reference` (`recording_file.cpp:514`, `574`, `589`). Fixed in `03c73ee` and `c30a216` | passed: configure, build, all 1 538 tests, and the steps that run on it: the scenario campaign, the large hall on 1 and 2 planning threads and its replay, example audits, record and replay, metrics export |
+| `build-test`, Windows, MSVC, headless (experimental) | failed to compile: C4244 from `std::fill` on a `vector<char>` given an `int` (fixed in `1ff3bad`) | failed to compile: C4127, a constant conditional, at `bench/regression_bench.cpp:306` (fixed in `77518c8`) | built; the **Test step ran 1 538 tests and 5 failed**: three allocation tests, the example-map test and one runner recording test (below). Fixed in `b874197`, `73749a5` and `dc9dfd9`; **not run since** |
+
+Both required macOS jobs, the Ubuntu jobs and the GCC 13 job pass the pinned-checksum tests, the recording
+fixture and the rest of the suite, so the state checksums agree between macOS arm64 (local and hosted), Ubuntu
+x86-64 with clang and GCC 13. The five Windows failures are none of those: the checksum tests and the fixture
+replay were among the tests that passed there too, so MSVC's Debug build agrees as well (read from the reported
+failures; the job log was not read).
+
+The steps after the tests are skipped on the Windows headless job by design (the campaign, the CLI checks and
+the smoke runs have `runner.os != 'Windows'` or need a release or GUI preset), so the failing Test step was the
+last thing it would have run.
+
+**The five Windows test failures, and why** (the numbers are from the run; the reasons are from the code, the
+MSVC STL source and a model, since nothing here can run MSVC):
+
+| Test | Cause | Fix |
 |---|---|---|
-| `format` | passed | passed |
-| `clang-tidy` | passed | passed |
-| `build-test`, Ubuntu 24.04 (x86-64), clang, Debug + GUI | passed: build and all tests; the scenario campaign, example audits, record and replay, metrics export, and the GUI and editor smoke runs on the dummy driver | passed |
-| `build-test`, Ubuntu 24.04, clang, Release + GUI | passed: the same, plus the planning, fleet and scaling benchmarks, the regression gate and the packaged program | passed |
-| `sanitizers`, `asan` (run with `ASAN_OPTIONS=detect_leaks=1`) and `tsan` | passed, the whole suite each | passed |
-| `build-test`, macOS, clang, Debug + GUI | cancelled before any step: the `macos-14` image had been retired | passed on `macos-26`: build, all tests, campaign, example audits, record and replay, metrics export, GUI and editor smoke runs |
-| `build-test`, macOS, clang, Release + GUI | cancelled, as above | passed: the same, plus the benchmarks, the regression gate, the macOS leak check (a `continue-on-error` step that reported success; its log was not read) and the packaged program |
-| `build-test`, Ubuntu, GCC 13, headless (experimental) | failed to compile: `-Werror=sign-conversion`, a `uint64_t` counter increased by an `int` ternary (fixed in `1ff3bad`, `53725a2`) | failed to compile: `-Werror=shadow` (the enumerator `EventSource::Command` against the `Command` alias, `recording.hpp:53`) and `-Werror=dangling-reference` (`recording_file.cpp:514`, `574`, `589`). Fixed in `03c73ee` and `c30a216`; **not run since** |
-| `build-test`, Windows, MSVC, headless (experimental) | failed to compile: C4244 from `std::fill` on a `vector<char>` given an `int` (fixed in `1ff3bad`) | failed to compile: C4127, a constant conditional, at `bench/regression_bench.cpp:306`. Fixed in `77518c8`; **not run since** |
+| `AStarAllocationTest.UnreachableFloodSearchesAllocateNothingWhenWarm`: 2 allocations, expected 0 | the test passed `{}` for the blocked cells inside the measured region; that makes a `PointSet`, which is two `std::vector`s, and in the MSVC Debug STL (`_ITERATOR_DEBUG_LEVEL` 2) each vector made or moved into allocates a small proxy. The search itself allocated nothing | the empty set is made once outside the measured regions |
+| `...FindPathAllocatesOnlyTheReturnedPath`: 6 allocations, expected 1 | 2 for the `{}`, plus the proxies of the three vectors made or moved on the way (the one `findPath` fills, the one in the optional it returns, the test's own assignment), plus the path buffer | the empty set is outside, the result is not assigned, and the library's own cost per vector is measured and added to the expectation (`1 + 2 x` for a path, `2 x` for an empty one, `x` for none; `x` is 0 with libc++ and libstdc++, so the numbers there are as before) |
+| `...ALargerGridGrowsTheWorkspaceOnceAndThenSettles` | the same `{}` in the measured regions | the same |
+| `EndToEndTest.EveryExampleMapIsValidAndRunsCleanOnAFleetAndALoad`: not in the canonical form | git for Windows checks text files out with CRLF (`core.autocrlf`); the writer is canonical and ends lines with LF, and the test compares bytes | `.gitattributes`: `examples/*.json text eol=lf`; the comparison is unchanged |
+| `RunnerRecordingTest.TheRecordingOfARunReplays...`: no recording taken midway | the 300-tick run at 8x is 37 ms long, less than the test's own command phase when sleeps and waits have the coarse timer of Windows, so the run was over before the polling loop looked | the run is started with a limit of 150 ticks, so the worker cannot pass the half way mark; the first recording is taken there (certainly a run in progress, at tick 150, with every command applied), then the run is started again for the second half, with the polling kept as an extra |
 
-Both required macOS jobs and the Ubuntu jobs pass the pinned-checksum tests, the recording fixture and the
-regression baseline, so the state checksums agree between macOS arm64 (local and hosted) and Ubuntu x86-64 with
-clang.
+On macOS the fixed tests pass, the CRLF failure was reproduced (the example maps converted to CRLF: same line,
+same message) and cured, and a clone made with `core.autocrlf=true` gets LF example maps byte-identical to the
+repository's. The allocation arithmetic was checked against a model of the MSVC STL's proxy allocation that
+reproduces the two reported numbers (2 and 6) from the old test and gives the expected values for the new one.
+What is **not** checked: the fixed tests were not run on MSVC.
 
 The GCC and MSVC diagnostics of run 2 are quoted from the job logs as they were relayed; the check annotations
 of a run carry only the exit status, and the logs need a signed-in GitHub session, so they were not fetched. A
@@ -124,7 +147,7 @@ cannot be rerun from here (roadmap step 12).
 | Map editor program | **Implemented, unverified** | its logic is tested without a window; the program starts, renders and exits on the real Cocoa/Metal driver (5 frames) and on the dummy driver (30), with no leaks. Nothing was typed or clicked and nobody looked at the picture: real keys, mouse, text and drawing are unchecked (roadmap 6). No file-name entry, no rectangle or fill tool |
 | Fleet interface logic (`view`: controller, session, scenes) | **Partial** | tested with a real runner and no window, including determinism of what the interface does. Cannot cancel a task, take a robot out of service or edit the layout; keeps a copy of the layout for judging clicks that goes stale after `PlaceObstacle` (roadmap 3) |
 | SDL3 window and drawing (`rendering`, `apps/gui`) | **Implemented, unverified** | compiles and links against real SDL3 3.2.0 (static); starts, renders and exits on the real Cocoa/Metal driver (5 frames) and on the dummy driver (30), with no leaks, and a probe read a drawn colour back exactly from both renderers. The mapping from real input, the look of the drawing, the text (SDL's debug font) and resizing have not been checked by eye or by a test |
-| Recording and replay | **Partial** | verified on this platform: record, replay, divergence reports, a recording kept as a fixture, replays on 0 and 2 planning threads. The CLI cannot give commands, a replay cannot be watched in a window, a recording starts at tick 0 with the default planner and dispatcher, and replaying has no time budget (roadmap 4 and 8). Checksums agree between macOS arm64 and Ubuntu x86-64 (the fixture replays on both); GCC and MSVC: not run |
+| Recording and replay | **Partial** | verified on this platform: record, replay, divergence reports, a recording kept as a fixture, replays on 0 and 2 planning threads. The CLI cannot give commands, a replay cannot be watched in a window, a recording starts at tick 0 with the default planner and dispatcher, and replaying has no time budget (roadmap 4 and 8). Checksums agree between macOS arm64, Ubuntu x86-64 (clang and GCC 13) and, from the reported failures, Windows with MSVC in Debug (the fixture replays on all); the MSVC Release configuration is not run |
 | Planning threads (`--threads`) | **Verified** | the state and checksum are the same for every thread count; TSan-clean. The gain is small (2 to 5 % of a whole step) |
 | Command line (`warehousesim_cli`) | **Verified** | the documented commands, exit statuses, equal output for equal seeds. `--audit` checks every step |
 | Invariant auditor | **Verified** | each rule fires on a state, built directly in the test, that breaks it; real runs are clean; auditing never changes a run |
@@ -133,11 +156,12 @@ cannot be rerun from here (roadmap step 12).
 | Packaging | **Verified** on macOS arm64 and Ubuntu | `.tar.gz` of the programs, examples, documents and `LICENSE`, unpacked and run (on Ubuntu by the Release job); SDL3 linked statically. Windows, signing and notarisation: not done |
 | Example maps | **Verified** | six maps, canonical form, each audited, run twice, on two planning threads, recorded and replayed in the test suite |
 | clang-format, clang-tidy | **Verified** on macOS and Ubuntu | pinned versions; both also passed in the hosted runs |
-| CI workflows (`ci.yml`, `release.yml`) | **Partial** | `ci.yml` ran twice on hosted runners; in the second run every required job passed (format, clang-tidy, both Ubuntu clang jobs, both macOS jobs, `asan`, `tsan`; see Hosted CI above). The experimental GCC 13 and MSVC jobs stopped at their build step in both runs; the second run's diagnostics are fixed and have not run since. `release.yml` has not run (it runs on a version tag or on demand) |
+| CI workflows (`ci.yml`, `release.yml`) | **Partial** | `ci.yml` ran three times on hosted runners; in the second and third runs every required job passed (format, clang-tidy, both Ubuntu clang jobs, both macOS jobs, `asan`, `tsan`) and in the third so did the experimental GCC 13 job (see Hosted CI above). The experimental MSVC job builds and fails five tests; the fixes have not run since. `release.yml` has not run (it runs on a version tag or on demand) |
 | Ubuntu (x86-64) with clang | **Verified** | the hosted runs: Debug and Release builds with the GUI, all tests, benchmarks, the campaign and smoke runs, packaging, `asan`, `tsan`, clang-tidy |
 | macOS 26 (arm64) on a hosted runner | **Verified** | the second hosted run: Debug and Release builds with the GUI, all tests, benchmarks, the regression gate, the campaign, record and replay, smoke runs, the macOS leak check (step reported success, log not read) and packaging |
-| GCC 13 (Linux), Windows with MSVC | **Implemented, unverified** | both stopped at a compile error in each hosted run, and the errors of run 2 are fixed but have not run since. The code compiles with a local GCC 16.2.0 and no diagnostic (compilation only, see Hosted CI). Windows has not run the tests at all |
-| Cross-platform agreement of checksums and recordings | **Partial** | the pinned checksum test, the recording kept as a fixture, the regression baseline and the rest of the suite pass on macOS arm64 (Apple clang, libc++; locally and on a hosted runner) and on Ubuntu x86-64 (clang, the platform's default C++ library). GCC and MSVC: not run; `-ffp-contract=off` is set, MSVC's floating-point mode was not examined |
+| GCC 13 (Linux, headless) | **Verified** | the third hosted run: configure, build, all 1 538 tests, the campaign, the large hall on two planning threads, example audits, record and replay and metrics export (an experimental job) |
+| Windows with MSVC (Debug, headless) | **Partial** | the third hosted run built it and ran all 1 538 tests: 1 533 passed. The five failures were test-side (three allocation counts that included the MSVC Debug STL's own proxies, CRLF example maps, one timing assumption in a runner test), are fixed and have not run since. Not run on Windows at all: the Release configuration, packaging as a `.zip`, the GUI and the editor, the scenario campaign and the command line checks of the workflow (which skip Windows), and `release.yml` |
+| Cross-platform agreement of checksums and recordings | **Partial** | the pinned checksum test, the recording kept as a fixture, the regression baseline and the rest of the suite pass on macOS arm64 (Apple clang, libc++; locally and on a hosted runner) and on Ubuntu x86-64 (clang, and GCC 13 with libstdc++). On Windows with MSVC (Debug) they were not among the five failures. The regression baseline was not run with GCC or MSVC (the gate runs in the release preset); `-ffp-contract=off` is set, MSVC's floating-point mode was not examined |
 | Leak detection | **Verified** on macOS | `scripts/leaks_macos.sh`: 0 leaks in 18 programs (the CLI, the GUI, the editor, all ten test executables); ownership is by RAII (no raw `new`/`delete`). On Linux the hosted `asan` job runs with LeakSanitizer enabled and passed (its log was not read for a LeakSanitizer line); Valgrind: not run (roadmap 11) |
 | Parser security (map file, recording) | **Partial** | strict, bounded in size and depth, never throw or crash on the inputs tried, one random-damage test (recordings only); no fuzzing |
 | File output security | **Partial** | all-or-nothing by rename; the temporary file name is predictable and not created exclusively (roadmap 9) |

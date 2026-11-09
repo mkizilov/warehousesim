@@ -176,10 +176,10 @@ which are correctly rounded, and `sin`, `cos` and `pow` in `view` only.
 
 **Residual risk.** The audit was run on macOS (Apple clang 21, arm64, libc++). The pinned checksum test, the
 recording kept as a fixture and the rest of the suite also passed in the hosted runs on Ubuntu x86-64 with
-clang and on macOS 26, so the checksums agree on those platforms. With GCC or MSVC they are **unverified**
-(neither has finished building the code in CI; see [verification.md](verification.md#hosted-ci)). `-ffp-contract=off` is a GCC and
-clang flag; MSVC's default floating-point mode was not examined, and the MSVC job is marked experimental for
-that reason.
+clang and with GCC 13 and on macOS 26, so the checksums agree on those platforms. With MSVC in the Debug
+configuration they were not among the five tests that failed (see [verification.md](verification.md#hosted-ci));
+the MSVC Release configuration is **unverified**. `-ffp-contract=off` is a GCC and clang flag; MSVC's default
+floating-point mode was not examined, and the MSVC job is marked experimental for that reason.
 
 ## Defects found by this audit and the release checks
 
@@ -196,14 +196,15 @@ that reason.
 
 ## What was not checked
 
-- Builds with GCC and MSVC, and Windows (see [verification.md](verification.md#hosted-ci) for the hosted
-  runs and what has not run since its fixes). The audit itself ran on macOS; Ubuntu with clang and macOS 26
-  passed the same test suite in CI.
+- Windows beyond the Debug headless build with MSVC (see [verification.md](verification.md#hosted-ci): five
+  tests failed there, for reasons in the tests, and the fixes have not run since). The audit itself ran on
+  macOS; Ubuntu with clang and with GCC 13, and macOS 26, passed the same test suite in CI.
 - Valgrind on Linux, and a reading of the hosted `asan` log for a LeakSanitizer line (the job ran with leak
   detection enabled and passed; on macOS `leaks(1)` was used).
 - A real window: mouse and keyboard mapping, SDL's rendering, on-screen text. The GUI and the editor ran
   with SDL's dummy video driver for 30 frames, and the test suite covers everything they decide.
-- Agreement of checksums and recordings on GCC and MSVC (macOS arm64 and Ubuntu x86-64 with clang agree).
+- Agreement of checksums and recordings with MSVC in the Release configuration (macOS arm64 and Ubuntu
+  x86-64 with clang and GCC 13 agree, and MSVC Debug did not disagree).
 - Maps beyond 512 x 512 cells and fleets beyond 512 robots (both refused by design), and fleets between 256
   and 512 robots (256 is the largest run in the benchmarks and tests).
 - Docker was not involved.
