@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `LICENSE`: the MIT license. The release archive installs it with the documents.
 - `ROADMAP.md`: 20 prioritised next steps with scope, dependencies, acceptance criteria and estimates.
 - `docs/verification.md`: what is implemented, verified, partial and unverified, the checks run on a fresh
   clone, and a manual checklist for a real window. The README gains a status summary.
@@ -54,7 +55,7 @@ The first release. Everything below is new in it; the history of how it grew is 
   already taken its own step in the same tick. Found by the invariant auditor in 5 of 328 audited
   campaign runs (crowded maps with 16 to 64 robots); the three reports read in full showed no overlap or
   swap. Fixed, with a
-  regression test, and the engine revision is now 2: a recording made by revision 1 replays exactly
+  regression test, and the engine revision is now 2: a recording from revision 1 replays exactly
   unless its run hit this, and says so if it does not.
 - `SimulationRunner::warehouse()` returned the layout as it was when the runner was built, so it did not
   show walls put up or taken down by commands while the run went on. It now returns the current layout.

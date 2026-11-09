@@ -454,9 +454,11 @@ reservations. At 256 robots a step costs about 0.75 ms.
 ## 18. Package and distribute
 
 **Scope.** A macOS application bundle, a Windows archive or installer, a Linux AppImage or package, with
-checksums and signatures; release notes generated from the changelog.
+checksums and signatures; release notes generated from the changelog; the notices that the libraries linked
+into the programs require, shipped as separate files in each archive (the programs link SDL3 statically and
+include nlohmann_json).
 
-**Rationale.** Today the release is a tarball built by `cpack` on the machine that runs it
+**Rationale.** Today the release is a tarball built with `cpack` on the machine that runs it
 (`cmake --build --preset package`); it was unpacked elsewhere and run, but only on macOS.
 
 **Dependencies.** Steps 5 and 10. Code signing and notarisation need credentials that are not in this repository.
@@ -465,8 +467,10 @@ checksums and signatures; release notes generated from the changelog.
 
 - The release workflow produces artifacts for three operating systems and smoke-runs each (`--version`, a CLI
   audit, the GUI on the dummy driver).
-- A `SHA256SUMS` file is published with them; the macOS bundle launches on a clean machine (checked by hand and
+- A `SHA256SUMS` file is published with them; the macOS bundle launches on a clean machine (checked manually and
   recorded).
+- Each archive contains the project's `LICENSE` and the third-party notice files, checked by listing the archive
+  in CI.
 
 **Effort.** 20 h.
 
@@ -486,7 +490,7 @@ Map editor and map files).
 **Acceptance criteria.**
 
 - Layout tests with fake font metrics; nothing clipped in golden frames at 1280 x 720 and 800 x 600; readable at
-  twice the pixel density (checked by hand and recorded).
+  twice the pixel density (checked manually and recorded).
 - A file name typed in the editor is used by save and load (a test injects text-input events); a rectangle or a
   fill is one undo step and never leaves the map.
 
@@ -544,8 +548,6 @@ after 2; the rest as capacity allows.
   baseline and the recording fixture, and update the README tables in the same change, as AGENTS.md requires.
 - The simulation's figures stay simulated: nothing here turns them into claims about real robots or
   warehouses.
-- A `LICENSE` file is not in the repository at this commit. Adding one is outside this roadmap and is assumed to
-  be done at publication.
 
 ## Not planned
 

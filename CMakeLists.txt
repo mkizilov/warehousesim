@@ -67,12 +67,13 @@ endif()
 # the example maps and the documentation. The libraries are internal and are not installed.
 install(DIRECTORY examples/ DESTINATION share/warehousesim/examples FILES_MATCHING PATTERN "*.json")
 install(DIRECTORY docs/ DESTINATION share/doc/warehousesim FILES_MATCHING PATTERN "*.md")
-install(FILES README.md CHANGELOG.md DESTINATION share/doc/warehousesim)
+install(FILES LICENSE README.md CHANGELOG.md DESTINATION share/doc/warehousesim)
 
 if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
   set(CPACK_PACKAGE_NAME warehousesim)
   set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+  set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
   set(CPACK_PACKAGE_FILE_NAME
     "warehousesim-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
   set(CPACK_GENERATOR TGZ)

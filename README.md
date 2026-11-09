@@ -62,8 +62,6 @@ full table, with the checks behind each row and a checklist for a real window, i
 - **Implemented, unverified**: the GUI and the editor in a real window (only SDL's dummy video driver was used),
   the CI workflows (never run on a hosted runner), builds on Linux, GCC and Windows, checksums on other
   platforms, leak detection.
-- **Not implemented**: a `LICENSE` file.
-
 What comes next, in priority order, is in [ROADMAP.md](ROADMAP.md).
 
 The rest of this file is the reference for each part of the simulator.
@@ -411,7 +409,7 @@ charging) and advances along its path. Rules worth knowing:
   its reserve goes to the nearest free charging station, or charges where it stands. If the layout has no
   charging station the reserve is ignored, since a robot could never recharge.
 - A robot whose battery is empty becomes `Unavailable`: a task it had not collected goes back to `Pending`,
-  one it was carrying fails. `Simulation::disableRobot` / `restoreRobot` do the same by hand (restoring
+  one it was carrying fails. `Simulation::disableRobot` / `restoreRobot` do the same on request (restoring
   swaps in a fresh battery if the old one is flat).
 - Loading, unloading, charging and unavailable robots are never pushed aside by other robots; idle and
   lower-priority navigating robots still are. A robot waiting on an occupied charger picks another one.
@@ -647,7 +645,7 @@ the status bar.
   will take them, then the ones a robot has) and the last 12 finished ones, newest first, with the counters
   of done, failed and cancelled tasks.
 - **Pause, speed and restart.** Space, `[` `]` and `R`. A restart rebuilds the scenario from the start with
-  the same seed (and layout, whether predefined or from a map file); every hand-made task is gone with it.
+  the same seed (and layout, whether predefined or from a map file); every manually submitted task is gone with it.
 - **Telling things apart.** Robots are filled squares coloured by state (with a heading nub, a battery gauge
   and a cargo box); obstacles are filled cells in wall and shelf colours that no robot colour comes near
   (`NoRobotColourCanPassForAFloorOrAnObstacleOrAStationCell`); destinations are *diamonds* (amber round a
@@ -687,7 +685,7 @@ The interface and the simulation meet in one place, and it is narrow.
   log. The tick a command lands at depends on timing, but the log says which: replaying the log on a fresh
   simulation (`RunnerDeterminismTest`, `FleetDeterminismTest`) gives the same state as the live run, and a
   session of only looking, selecting, zooming and hovering, or of pausing and changing speed at random,
-  leaves the run byte-identical to a direct one. A hand-made task takes no draw from the random task
+  leaves the run byte-identical to a direct one. A manually submitted task takes no draw from the random task
   generator, so the generated stream is the same with or without it.
 - `FleetSession` is the frame loop's glue (read what to draw, tell the controller what became of its
   commands, run it, forward its output); `apps/gui/main.cpp` only adds SDL around it, so the glue is tested
@@ -864,7 +862,7 @@ the energy estimate per task rises because idle robots draw power in the model (
 
 This section is about how long the program takes to compute, not about simulated results: everything in
 it is a wall-clock time or a count of what the program did. The times are from one machine (Apple M4,
-10 hardware threads), with hand-built binaries (Apple clang 21, `-O3 -DNDEBUG`), and are medians of the number
+10 hardware threads), with binaries compiled directly with Apple clang 21 (`-O3 -DNDEBUG`, no CMake), and are medians of the number
 of runs stated. [docs/benchmarks.md](docs/benchmarks.md) repeats the whole-step and thread measurements with
 the CMake `release` preset (link-time optimisation) and says which of these it reproduces. The figures say
 nothing about real robots or other machines; rerun `warehousesim_scaling_bench` on a Release build to get
@@ -946,7 +944,7 @@ And with the limits the `large` hall gets (below), where robots really do search
 | `large`, 256 robots, a task every 2 ticks | 2.028 | 0.455 | 4.5x | yes |
 
 Nothing about what a run computes changed: the three bundled halls give byte-identical output and
-recordings to the previous commit (3 layouts x 4 seeds x 2 000 steps), and a recording made by the previous
+recordings to the previous commit (3 layouts x 4 seeds x 2 000 steps), and a recording from the previous
 engine replays on this one. The one exception is the new `large` layout, which has no history.
 
 **Planning limits for a big hall.** A search in space and time starts from the distance from every cell to
@@ -1125,7 +1123,7 @@ are read and written with `parseRecording` / `serializeRecording` / `loadRecordi
 `Divergence`: the tick and what differs, in words. Checked as it goes, so the first difference is the one
 reported, and the replay stops there:
 
-- the **state checksum** at every checkpoint (tick 0 first, which also catches a recording made by an
+- the **state checksum** at every checkpoint (tick 0 first, which also catches a recording from an
   engine that builds its scenario differently) and at the end;
 - whether each **command** was accepted or refused as recorded (a recorded "accepted" that the replay
   refuses reports the reason the engine gave);
@@ -1134,7 +1132,7 @@ reported, and the replay stops there:
 
 So a change to any input, setting, command or the engine itself is found at the first tick where it shows,
 not just at the end, and usually at the event before the first checksum that would show it. A divergence
-from a recording made by another `engine` revision says so. A recording that cannot be replayed at all
+from a recording of another `engine` revision says so. A recording that cannot be replayed at all
 (not consistent, a scenario that cannot be built, an engine error) comes back as a divergence at tick 0
 or wherever it happened; `replay()` throws for no recording.
 
@@ -1155,7 +1153,7 @@ recordings give equal text; reading then writing changes nothing) and saves thro
 rename. The keys are documented at the top of `recording_file.hpp`, and `RecordingFormatTest` pins the exact
 text of a small recording and of a recording made earlier that must keep replaying.
 
-Everything but `scenario` and `ticks` may be left out of a file made by hand. Commands with no
+Everything but `scenario` and `ticks` may be left out of a file written manually. Commands with no
 `taskEvents`, `checkpoints` or `end` form a *scenario script*: it is played as it says and only the commands'
 `accepted` is compared.
 
@@ -1178,7 +1176,7 @@ Everything but `scenario` and `ticks` may be left out of a file made by hand. Co
 - A recording starts at tick 0, before the first task, of a simulation with the default planner and
   dispatcher. A restart in the window starts a new recording; the part before it is not kept.
 - The CLI has no way to give commands, so a recording from it has none; commands come from the window
-  (`--record` on the GUI), from code (`Recorder`), or from a file edited by hand (a scenario script).
+  (`--record` on the GUI), from code (`Recorder`), or from a file edited manually (a scenario script).
 - There is no way to *watch* a replay in the window: `--replay` is headless and prints the final state.
 - Replaying takes as long as running: a file may ask for up to 10^9 ticks and 4096 robots, and nothing
   limits the time it takes. Files are limited to 64 MiB and layouts to 512 x 512.
@@ -1324,4 +1322,8 @@ accepted with a warning, and tasks between the regions can never be done.
   try; it would change what the simulation computes (a new engine revision), so it is not part of this
   release.
 
-Project rules for contributors and agents are in [AGENTS.md](AGENTS.md).
+Project rules for contributors are in [AGENTS.md](AGENTS.md).
+
+## License
+
+WarehouseSim is released under the [MIT License](LICENSE).

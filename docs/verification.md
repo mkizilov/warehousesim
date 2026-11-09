@@ -78,7 +78,7 @@ cannot be rerun from here (roadmap step 12).
 | Recording and replay | **Partial** | verified on this platform: record, replay, divergence reports, a recording kept as a fixture, replays on 0 and 2 planning threads. The CLI cannot give commands, a replay cannot be watched in a window, a recording starts at tick 0 with the default planner and dispatcher, and replaying has no time budget (roadmap 4 and 8). Checksums on other platforms: unverified |
 | Planning threads (`--threads`) | **Verified** | the state and checksum are the same for every thread count; TSan-clean. The gain is small (2 to 5 % of a whole step) |
 | Command line (`warehousesim_cli`) | **Verified** | the documented commands, exit statuses, equal output for equal seeds. `--audit` checks every step |
-| Invariant auditor | **Verified** | each rule fires on a hand-built state that breaks it; real runs are clean; auditing never changes a run |
+| Invariant auditor | **Verified** | each rule fires on a state, built directly in the test, that breaks it; real runs are clean; auditing never changes a run |
 | Performance regression gate | **Verified** | exact behaviour and allocations against a committed baseline; time only against times saved on one machine. Allocation comparison is off for other standard libraries than libc++ |
 | Benchmarks and numbers | **Verified** (one machine) | Apple M4, not quiet. Quote only the exact columns elsewhere; the timings belong to this machine |
 | Packaging | **Verified** on macOS arm64 | `.tar.gz` of the programs, examples and documents, unpacked and run; SDL3 linked statically. Other operating systems, signing and notarisation: not done |
@@ -92,7 +92,7 @@ cannot be rerun from here (roadmap step 12).
 | File output security | **Partial** | all-or-nothing by rename; the temporary file name is predictable and not created exclusively (roadmap 9) |
 | Supply chain | **Partial** | dependencies and tools pinned by tag and version, not by hash; actions by tag (roadmap 10) |
 | Docker | **Not implemented** | not used; any Docker-based check would be unverified here |
-| `LICENSE` file | **Not implemented** | not in the repository at this commit |
+| License | **Verified** | `LICENSE` at the root (MIT); the README links to it; the release archive installs it with the documents |
 
 ## Known defects and limits that are not fixed
 
