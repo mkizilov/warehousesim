@@ -66,28 +66,33 @@
     {
       "name": "default",
       "configurePreset": "default",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 900 }
     },
     {
       "name": "headless",
       "configurePreset": "headless",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 900 }
     },
     {
       "name": "asan",
       "configurePreset": "asan",
       "output": { "outputOnFailure": true },
+      "execution": { "timeout": 900 },
       "environment": { "UBSAN_OPTIONS": "print_stacktrace=1" }
     },
     {
       "name": "tsan",
       "configurePreset": "tsan",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 900 }
     },
     {
       "name": "release",
       "configurePreset": "release",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "execution": { "timeout": 900 }
     }
   ]
 }

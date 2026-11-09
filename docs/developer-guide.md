@@ -62,10 +62,15 @@ The whole-system tests, and what each guards:
 |---|---|
 | `end_to_end_test.cpp` | every layout × fleet size × task load runs clean and does work; no task, no motion; bigger fleets do more; 100 and 256 robots on `large`; a random mix of every command kind, recorded and replayed on 0 and 2 planning threads; every example map |
 | `random_worlds_test.cpp` | random halls: map file round trip, the simulator refuses exactly the unusable ones, A\* and `PathDistance` against a breadth-first search, audited runs that replay exactly |
-| `audit_test.cpp` | each invariant of the auditor is noticed when broken (hand-built states), real runs are clean, auditing never changes a run |
+| `audit_test.cpp` | each invariant of the auditor is noticed when broken (states built directly in the test), real runs are clean, auditing never changes a run |
 | `collision_avoidance_test.cpp`, `cooperative_planning_test.cpp`, `movement_test.cpp` | crossing paths, opposing corridor traffic, intersections, simultaneous arrivals; no overlap, no swap, at most a cell a tick |
 | `replay_test.cpp`, `recording_test.cpp`, `runner_recording_test.cpp`, `planning_threads_test.cpp` | replay from a recording gives the same state, metrics and checksums; a pinned recording made earlier still replays; thread counts change nothing |
 | `cmake/RunHeadlessCli.cmake`, `cmake/RunExample.cmake` | the CLI as a user runs it: exit codes, equal output for equal seeds, refused maps, record and replay, planning threads, every example |
+
+Every test preset gives a test 900 seconds (`execution.timeout` in `CMakePresets.json`; the slowest test takes
+about 40 s under ThreadSanitizer), and every CI job has a `timeout-minutes`, so that a hang is reported with the
+name of the test instead of waited for. To diagnose one, run that test alone with the filter below, and under
+`ctest` with a short `--timeout N`; a threaded test that hangs is first run under ThreadSanitizer.
 
 Useful ways to run a part:
 

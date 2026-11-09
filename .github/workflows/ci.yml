@@ -22,6 +22,7 @@ env:
 jobs:
   format:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Install clang-format
@@ -37,6 +38,7 @@ jobs:
   build-test:
     name: build-test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -152,6 +154,7 @@ jobs:
   sanitizers:
     name: sanitizers (${{ matrix.preset }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -175,6 +178,7 @@ jobs:
   # compiler and headers of this runner it has not been run, hence experimental.
   clang-tidy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
